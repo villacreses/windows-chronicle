@@ -1,12 +1,25 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+namespace Chronicle.Domain;
 
-namespace Chronicle.Domain
+public sealed class EventInstance
 {
-    internal class EventInstance
-    {
-    }
+    public Guid EventId { get; init; }
+
+    public Guid CalendarId { get; init; }
+
+    public string Title { get; init; } = "";
+
+    public DateTime StartTimeUtc { get; init; }
+
+    public DateTime EndTimeUtc { get; init; }
+
+    public bool IsAllDay { get; init; }
+
+    // Stable occurrence identity
+    public DateTime InstanceStartUtc { get; init; }
+
+    public Event SourceEvent { get; init; } = default!;
+
+    public TimeSpan Duration =>
+        EndTimeUtc - StartTimeUtc;
 }

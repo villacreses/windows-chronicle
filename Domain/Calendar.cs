@@ -1,12 +1,10 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
-namespace Chronicle.Domain
+namespace Chronicle.Domain;
+
+public sealed class Calendar
 {
-    internal class Calendar
-    {
-    }
+    public Guid Id { get; init; }
+    public string Name { get; set; } = ""; // Store as hex string for simplicity
+    public string Color { get; set; } = "#3B82F6";
 }
