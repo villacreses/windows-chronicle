@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "Chronicle (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "Chronicle (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}
