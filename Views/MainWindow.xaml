@@ -13,7 +13,35 @@
         <MicaBackdrop />
     </Window.SystemBackdrop>
 
-    <Grid>
+    <Grid x:Name="RootGrid" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}" Padding="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
 
+        <!-- Month/Year Header -->
+        <TextBlock 
+            Grid.Row="0" 
+            Text="Calendar" 
+            FontSize="32" 
+            FontWeight="Bold" 
+            Margin="0,0,0,20"/>
+
+        <!-- Day Name Headers (Sun-Sat) -->
+        <Grid x:Name="DayNamesGrid" Grid.Row="1" Height="40">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+        </Grid>
+
+        <!-- Calendar Grid (7 columns, variable rows) -->
+        <Grid x:Name="CalendarGrid" Grid.Row="2"/>
     </Grid>
 </Window>

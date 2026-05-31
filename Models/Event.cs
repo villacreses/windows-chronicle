@@ -1,6 +1,6 @@
 ﻿using System;
 
-namespace Chronicle.Domain;
+namespace Chronicle.Models;
 
 public sealed class Event
 {
