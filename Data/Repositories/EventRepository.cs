@@ -1,12 +1,24 @@
 ﻿using Chronicle.Models;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Threading.Tasks;
 
 namespace Chronicle.Data.Repositories;
 
 public sealed class EventRepository
 {
+    private static DateTime ParseUtcDateTime(string value)
+    {
+        var parsed =
+            DateTime.Parse(
+                value,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.RoundtripKind);
+
+        return DateTime.SpecifyKind(parsed.ToUniversalTime(), DateTimeKind.Utc);
+    }
+
 #pragma warning disable CA1822 // Mark members as static
     public async Task InsertAsync(Event evt)
 #pragma warning restore CA1822 // Mark members as static
@@ -23,7 +35,7 @@ public sealed class EventRepository
         """
         INSERT INTO Events (
             Id,
-            CalendarId,s
+            CalendarId,
             Title,
             Description,
             StartTimeUtc,
@@ -160,11 +172,11 @@ public sealed class EventRepository
                             : reader.GetString(3),
 
                     StartTimeUtc =
-                        DateTime.Parse(
+                        ParseUtcDateTime(
                             reader.GetString(4)),
 
                     EndTimeUtc =
-                        DateTime.Parse(
+                        ParseUtcDateTime(
                             reader.GetString(5)),
 
                     IsAllDay =
@@ -176,11 +188,11 @@ public sealed class EventRepository
                             : reader.GetString(7),
 
                     CreatedAtUtc =
-                        DateTime.Parse(
+                        ParseUtcDateTime(
                             reader.GetString(8)),
 
                     UpdatedAtUtc =
-                        DateTime.Parse(
+                        ParseUtcDateTime(
                             reader.GetString(9))
                 });
         }

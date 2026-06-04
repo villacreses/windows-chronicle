@@ -27,10 +27,24 @@ public sealed class Event
 
     public void Validate()
     {
+        ValidateUtcKind(StartTimeUtc, nameof(StartTimeUtc));
+        ValidateUtcKind(EndTimeUtc, nameof(EndTimeUtc));
+        ValidateUtcKind(CreatedAtUtc, nameof(CreatedAtUtc));
+        ValidateUtcKind(UpdatedAtUtc, nameof(UpdatedAtUtc));
+
         if (EndTimeUtc < StartTimeUtc)
         {
             throw new InvalidOperationException(
                 "Event end time cannot be before start time.");
+        }
+    }
+
+    private static void ValidateUtcKind(DateTime value, string propertyName)
+    {
+        if (value.Kind != DateTimeKind.Utc)
+        {
+            throw new InvalidOperationException(
+                $"{propertyName} must be UTC.");
         }
     }
 }

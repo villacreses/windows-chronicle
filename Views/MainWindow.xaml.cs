@@ -14,13 +14,14 @@ namespace Chronicle
     public sealed partial class MainWindow : Window
     {
         private readonly EventRepository _eventRepository = new();
+        private readonly CalendarRepository _calendarRepository = new();
         private DateTime _currentMonth;
         private Dictionary<DateTime, List<Event>> _eventsByDate = new();
 
         public MainWindow()
         {
             InitializeComponent();
-            _currentMonth = DateTime.UtcNow;
+            _currentMonth = DateTime.Now;
 
             // Initialize calendar after window is fully loaded
             DispatcherQueue.TryEnqueue(async () => await InitializeCalendarAsync());
@@ -41,13 +42,17 @@ namespace Chronicle
         }
 
         /// <summary>
-        /// Gets the UTC date key for event grouping.
-        /// Extracts only the date portion (time set to midnight) from a UTC DateTime.
-        /// This method centralizes the event-to-day mapping logic for future extensibility.
+        /// Gets the local calendar date key for event grouping and lookup.
+        /// Event storage remains UTC, but the month grid is a local wall-clock calendar.
         /// </summary>
-        private static DateTime GetEventDayKey(DateTime utc)
+        private static DateTime GetEventDayKey(DateTime utcDateTime)
         {
-            return utc.Date;
+            return GetLocalDayKey(utcDateTime.ToLocalTime());
+        }
+
+        private static DateTime GetLocalDayKey(DateTime localDateTime)
+        {
+            return DateTime.SpecifyKind(localDateTime.Date, DateTimeKind.Local);
         }
 
         /// <summary>
@@ -56,9 +61,24 @@ namespace Chronicle
         /// </summary>
         private (DateTime startUtc, DateTime endUtc) GetCurrentMonthRangeUtc()
         {
-            var monthStart = new DateTime(_currentMonth.Year, _currentMonth.Month, 1, 0, 0, 0, DateTimeKind.Utc);
-            var monthEnd = monthStart.AddMonths(1).AddTicks(-1);
-            return (monthStart, monthEnd);
+            var monthStartLocal = GetCurrentMonthStartLocal();
+            var monthEndUtc = monthStartLocal.AddMonths(1).ToUniversalTime().AddTicks(-1);
+            return (monthStartLocal.ToUniversalTime(), monthEndUtc);
+        }
+
+        private DateTime GetCurrentMonthStartLocal()
+        {
+            return new DateTime(_currentMonth.Year, _currentMonth.Month, 1, 0, 0, 0, DateTimeKind.Local);
+        }
+
+        private static DateTime CombineLocalDateAndTimeAsUtc(DateTime date, TimeSpan time)
+        {
+            var localDateTime =
+                DateTime.SpecifyKind(
+                    date.Date.Add(time),
+                    DateTimeKind.Local);
+
+            return localDateTime.ToUniversalTime();
         }
 
         private async Task LoadEventsAsync()
@@ -74,7 +94,7 @@ namespace Chronicle
                 .ToDictionary(g => g.Key, g => g.ToList());
         }
 
-        private async Task RenderDayHeaders()
+        private void RenderDayHeaders()
         {
             var dayNames = new[] { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
 
@@ -108,10 +128,9 @@ namespace Chronicle
             }
 
             // Calculate grid layout using centralized month range
-            var (monthStart, _) = GetCurrentMonthRangeUtc();
-            var monthEnd = monthStart.AddMonths(1).AddDays(-1);
+            var monthStart = GetCurrentMonthStartLocal();
             var firstDayOfWeek = (int)monthStart.DayOfWeek;
-            var daysInMonth = monthEnd.Day;
+            var daysInMonth = DateTime.DaysInMonth(monthStart.Year, monthStart.Month);
             var totalCells = firstDayOfWeek + daysInMonth;
             var weeks = (int)Math.Ceiling(totalCells / 7.0);
 
@@ -159,7 +178,7 @@ namespace Chronicle
             if (isInMonth)
             {
                 int dayNumber = cellIndex - firstDayOfWeek + 1;
-                var dayDate = monthStart.AddDays(dayNumber - 1);
+                var dayDate = GetLocalDayKey(monthStart.AddDays(dayNumber - 1));
 
                 // Day number header
                 var dayTextBlock = new TextBlock
@@ -176,6 +195,12 @@ namespace Chronicle
                 {
                     stackPanel.Children.Add(CreateEventList(events));
                 }
+
+                // Make valid month days clickable
+                border.PointerPressed += async (s, e) =>
+                {
+                    await ShowCreateEventDialogAsync(dayDate);
+                };
             }
             else
             {
@@ -231,6 +256,184 @@ namespace Chronicle
 
             scrollViewer.Content = eventsPanel;
             return scrollViewer;
+        }
+
+        private async Task ShowCreateEventDialogAsync(DateTime selectedDay)
+        {
+            try
+            {
+                // Load calendars from database
+                var calendars = await _calendarRepository.GetAllAsync();
+
+                if (calendars.Count == 0)
+                {
+                    // No calendars exist - show error
+                    var errorDialog = new ContentDialog
+                    {
+                        Title = "No Calendars",
+                        Content = "Please create a calendar before adding events.",
+                        CloseButtonText = "OK",
+                        XamlRoot = this.Content.XamlRoot
+                    };
+                    await errorDialog.ShowAsync();
+                    return;
+                }
+
+                // Create dialog
+                var dialog = new ContentDialog
+                {
+                    Title = "Create Event",
+                    PrimaryButtonText = "Save",
+                    CloseButtonText = "Cancel",
+                    XamlRoot = this.Content.XamlRoot
+                };
+
+                // Create dialog content
+                var contentPanel = new StackPanel
+                {
+                    Orientation = Orientation.Vertical,
+                    Spacing = 12
+                };
+
+                // Title field
+                var titleTextBox = new TextBox
+                {
+                    PlaceholderText = "Event title",
+                    Text = ""
+                };
+                contentPanel.Children.Add(new TextBlock { Text = "Title" });
+                contentPanel.Children.Add(titleTextBox);
+
+                // Calendar selection
+                Calendar selectedCalendar = calendars[0];
+
+                if (calendars.Count == 1)
+                {
+                    // Auto-select single calendar
+                    contentPanel.Children.Add(new TextBlock
+                    {
+                        Text = $"Calendar: {calendars[0].Name}",
+                        FontSize = 14,
+                        Foreground = new SolidColorBrush(new Windows.UI.Color { A = 255, R = 100, G = 100, B = 100 })
+                    });
+                }
+                else
+                {
+                    // Show ComboBox for multiple calendars
+                    var calendarComboBox = new ComboBox
+                    {
+                        ItemsSource = calendars.Select(c => c.Name).ToList()
+                    };
+                    calendarComboBox.SelectedIndex = 0;
+                    calendarComboBox.SelectionChanged += (s, e) =>
+                    {
+                        if (calendarComboBox.SelectedIndex >= 0)
+                        {
+                            selectedCalendar = calendars[calendarComboBox.SelectedIndex];
+                        }
+                    };
+                    contentPanel.Children.Add(new TextBlock { Text = "Calendar" });
+                    contentPanel.Children.Add(calendarComboBox);
+                }
+
+                // Start time
+                var startTimePicker = new TimePicker
+                {
+                    Time = new TimeSpan(9, 0, 0) // 9:00 AM default
+                };
+                contentPanel.Children.Add(new TextBlock { Text = "Start Time" });
+                contentPanel.Children.Add(startTimePicker);
+
+                // End time
+                var endTimePicker = new TimePicker
+                {
+                    Time = new TimeSpan(10, 0, 0) // 10:00 AM default
+                };
+                contentPanel.Children.Add(new TextBlock { Text = "End Time" });
+                contentPanel.Children.Add(endTimePicker);
+
+                var errorTextBlock = new TextBlock
+                {
+                    Foreground = new SolidColorBrush(new Windows.UI.Color { A = 255, R = 196, G = 43, B = 28 }),
+                    TextWrapping = TextWrapping.Wrap,
+                    Visibility = Visibility.Collapsed
+                };
+                contentPanel.Children.Add(errorTextBlock);
+
+                dialog.Content = contentPanel;
+
+                // Handle save
+                dialog.PrimaryButtonClick += async (s, e) =>
+                {
+                    var deferral = e.GetDeferral();
+                    dialog.IsPrimaryButtonEnabled = false;
+                    errorTextBlock.Visibility = Visibility.Collapsed;
+
+                    try
+                    {
+                        var title = titleTextBox.Text?.Trim();
+
+                        if (string.IsNullOrEmpty(title))
+                        {
+                            e.Cancel = true;
+                            errorTextBlock.Text = "Event title is required.";
+                            errorTextBlock.Visibility = Visibility.Visible;
+                            return;
+                        }
+
+                        var startTimeUtc =
+                            CombineLocalDateAndTimeAsUtc(
+                                selectedDay,
+                                startTimePicker.Time);
+
+                        var endTimeUtc =
+                            CombineLocalDateAndTimeAsUtc(
+                                selectedDay,
+                                endTimePicker.Time);
+
+                        var nowUtc = DateTime.UtcNow;
+
+                        var newEvent = new Event
+                        {
+                            Id = Guid.NewGuid(),
+                            CalendarId = selectedCalendar.Id,
+                            Title = title,
+                            StartTimeUtc = startTimeUtc,
+                            EndTimeUtc = endTimeUtc,
+                            Description = null,
+                            IsAllDay = false,
+                            RecurrenceRuleJson = null,
+                            CreatedAtUtc = nowUtc,
+                            UpdatedAtUtc = nowUtc
+                        };
+
+                        // Validate and persist
+                        newEvent.Validate();
+                        await _eventRepository.InsertAsync(newEvent);
+
+                        // Refresh calendar
+                        await LoadEventsAsync();
+                        RenderCalendarGrid();
+                    }
+                    catch (Exception ex)
+                    {
+                        e.Cancel = true;
+                        errorTextBlock.Text = ex.Message;
+                        errorTextBlock.Visibility = Visibility.Visible;
+                    }
+                    finally
+                    {
+                        dialog.IsPrimaryButtonEnabled = true;
+                        deferral.Complete();
+                    }
+                };
+
+                await dialog.ShowAsync();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error showing create event dialog: {ex.Message}\n{ex.StackTrace}");
+            }
         }
     }
 }
