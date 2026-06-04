@@ -1,7 +1,17 @@
 # Chronicle Project Structure
 
 ## Overview
-**Chronicle** is a Windows desktop application built with .NET 8 and WinUI 3. It's a calendar/event management system that stores data in SQLite and allows users to manage calendars and events with recurring event support.
+**Chronicle** is a lightweight Windows desktop calendar application built with .NET 8 and WinUI 3. It displays a month-view calendar grid backed by SQLite for event storage.
+
+**Current Capabilities:**
+- Display events in a traditional month-view calendar grid
+- Load events from SQLite database
+- Create new events via dialog UI
+- Navigate between months with Previous/Next/Today buttons
+- Support for multiple calendars with distinct colors
+- All event times stored in UTC with timezone-aware conversion
+
+**Status:** Active development on core UI and navigation workflows. Foundational database schema supports future features like recurring events and event editing, though these workflows are not yet fully implemented in the UI.
 
 - **Framework**: .NET 8.0 (Windows 10.0.19041.0+)
 - **UI Framework**: WinUI 3 (Windows App SDK 2.1.3)
@@ -81,8 +91,13 @@ Chronicle/
 
 ### 1. **UI Layer** (`Views/`)
 - **MainWindow**: Primary user interface for the calendar application
-- Built with WinUI 3 (XAML + C#)
-- Displays calendars and events with an interactive UI
+  - Built with WinUI 3 (XAML + C#)
+  - Month-view calendar grid (7 columns, variable rows for weeks)
+  - Month navigation controls (Previous, Next, Today buttons)
+  - Dynamic month/year header display
+  - Day-of-week headers (Sun–Sat)
+  - Click-on-day creates event dialog
+  - Events rendered as clickable text items within day cells
 
 ### 2. **Data Access Layer** (`Data/`)
 - **AppDatabase**: 
@@ -91,17 +106,40 @@ Chronicle/
   - Manages foreign key constraints
   - Database stored at: `{LocalAppData}/chronicle.db`
 - **Repositories**: Repository pattern for data access
-  - `EventRepository`: CRUD operations and queries for events
-  - `CalendarRepository`: CRUD operations and queries for calendars
+  - `EventRepository`: 
+    - `InsertAsync()` - Create new events
+    - `GetInRangeAsync()` - Query events by date range (used for month view)
+    - Supports both one-time and recurring event queries (infrastructure present, UI not yet implemented)
+  - `CalendarRepository`: Create/read calendars
 
 ### 3. **Models Layer** (`Models/`)
 - **Calendar**: Represents a calendar entity
-  - Properties: `Id` (Guid), `Name` (string), `Color` (hex string)
-- **Event**: Represents an event with full validation
-  - Properties: `Id`, `CalendarId`, `Title`, `Description`, timestamps, recurrence rule
-  - Includes `Validate()` method to ensure end time ≥ start time
-  - Support for all-day events and recurring events (via JSON recurrence rule)
-  - All times stored as UTC
+  - Properties: `Id` (Guid), `Name` (string), `Color` (hex string, default: #3B82F6)
+  - Multiple calendars supported; calendars are displayed in event creation dialog
+- **Event**: Represents a single event instance
+  - Properties: `Id`, `CalendarId`, `Title`, `Description`, `StartTimeUtc`, `EndTimeUtc`, `IsAllDay`, `RecurrenceRuleJson`, `CreatedAtUtc`, `UpdatedAtUtc`
+  - Validation: Enforces UTC kind and end-time ≥ start-time
+  - All times stored and handled as UTC internally
+  - `RecurrenceRuleJson` field present but not yet processed/expanded in UI
+
+### Data Flow
+```
+User (UI interactions)
+        ↓
+    MainWindow
+        ├─ On load: call RefreshMonthAsync()
+        ├─ On month navigation: update _displayMonth, call RefreshMonthAsync()
+        ├─ On day click: open Create Event dialog
+        └─ On event save: InsertAsync(), call RefreshMonthAsync()
+        ↓
+EventRepository / CalendarRepository
+        ├─ GetInRangeAsync(startUtc, endUtc) → fetch events for month
+        └─ InsertAsync(event) → persist new event
+        ↓
+AppDatabase (SQLite connection pool)
+        ↓
+    SQLite database file (chronicle.db)
+```
 
 ---
 
@@ -203,25 +241,150 @@ sqlite database file (chronicle.db)
 
 ---
 
-## Core Features
+## Current UI Layout
 
-1. **Calendar Management**: Create and manage multiple calendars with distinct colors
-2. **Event Management**: Create, read, update, delete events with full CRUD support
-3. **Recurring Events**: Support for recurring events (recurrence rule stored as JSON)
-4. **All-Day Events**: Dedicated flag for all-day event support
-5. **Event Queries**: Query events within date ranges (using indexed StartTimeUtc/EndTimeUtc)
-6. **Data Validation**: Event validation ensures logical event times
-7. **Timestamps**: Track created and updated timestamps in UTC
+The main calendar view consists of:
+
+1. **Navigation Header** (top)
+   - Previous button (navigate to previous month)
+   - Today button (return to current month)
+   - Next button (navigate to next month)
+   - Month/Year display (e.g., "June 2026", updated dynamically)
+
+2. **Day-of-Week Headers** (row below navigation)
+   - Sun, Mon, Tue, Wed, Thu, Fri, Sat
+
+3. **Calendar Grid** (main area)
+   - 7 columns (one per day of week)
+   - Variable rows (typically 4–6 weeks per month)
+   - Each cell represents a single day
+   - Days from current month are interactive (white background); adjacent month days are muted (light gray)
+   - Click any day in the current month to create a new event
+   - Events listed as text items within day cells (up to 5 visible; "+N more" indicator if overflow)
+
+4. **Event Creation Dialog** (modal)
+   - Triggered when user clicks a day
+   - Fields: Event title (required), Calendar selection (dropdown or label), Start time picker, End time picker
+   - Validation: Title required, end time ≥ start time
+   - Saves event and refreshes calendar view
+
+---
+
+## Current Capabilities
+
+**Calendar Navigation:**
+- Display month-view grid
+- Navigate to previous month
+- Navigate to next month
+- Jump to current month ("Today" button)
+- Display month/year header with automatic updates
+
+**Event Management:**
+- Create new events via dialog
+- Specify event title
+- Specify start and end times (time pickers)
+- Assign event to a calendar (from dropdown)
+- Save event to SQLite database
+- Query events by month date range
+
+**Data Persistence:**
+- Multiple calendars stored in SQLite
+- Multiple events per calendar
+- Event metadata: title, description, times (UTC), all-day flag
+- Created/updated timestamps
+- Color-coded calendars
+
+**UI Rendering:**
+- Month-view calendar grid
+- Dynamic day cells with borders and spacing
+- Event text display within day cells
+- Scrollable event lists (max height per cell)
+- Responsive grid layout
+
+---
+
+## Known Limitations
+
+- **No event editing**: Once created, events cannot be modified via UI
+- **No event deletion**: Events cannot be deleted via UI
+- **No recurring event UI**: The database supports recurrence rules (JSON), but the UI does not provide:
+  - UI to create recurring events
+  - Expansion/rendering of recurring event instances
+  - Handling of exception dates or recurrence parameters
+- **No external integrations**: No Google Calendar, Outlook Calendar, or other provider sync
+- **Month view only**: No day view, week view, or agenda view
+- **Limited styling**: Minimal visual customization (colors, fonts, themes)
+- **No search**: No event search or filtering
+- **No multi-day event support**: Events assumed to be single-day or span visible via start/end time only
+- **No reminders/notifications**: No alert system
+
+---
+
+## Next Milestones
+
+Likely candidates for future implementation:
+
+1. **Event Editing** - Modify existing event details (title, time, calendar)
+2. **Event Deletion** - Remove events with confirmation dialog
+3. **Recurring Events UI** - Create and expand recurring events in calendar view
+4. **Week View** - Alternative layout showing 7-day grid with hourly slots
+5. **External Calendar Sync** - Integrate with Google Calendar, Outlook, or iCalendar feeds
+6. **Event Details Panel** - View/edit full event details including description
+7. **Search/Filter** - Find events by keyword or date range
+8. **Drag-and-Reschedule** - Move events between days or adjust times via drag-drop
+9. **Themes/Customization** - Light/dark mode, calendar color themes
+10. **Notifications** - Event reminders at configurable intervals
 
 ---
 
 ## Development Notes
 
+- **Code-Behind Pattern**: UI logic implemented in MainWindow.xaml.cs without MVVM framework (intentionally simple for early-stage development)
+- **Async/Await**: All database operations use async Task pattern for non-blocking UI
 - **Nullable Reference Types**: Enabled throughout the project for null-safety
 - **XAML Code Generation**: Disabled (manual code-behind implementation)
-- **Code Generation**: Program generation disabled (custom entry point handling)
-- **Database Schema**: Automatically loaded and initialized on application startup
-- **Repository Pattern**: Data access abstraction layer for maintainability
-- **Time Handling**: All times stored and handled in UTC internally
+- **Time Handling**: All times stored as UTC; local time converted at display/input boundaries
+- **Month Navigation Invariant**: `_displayMonth` always represents the first day of displayed month (e.g., 2026-06-01, never 2026-06-17)
+- **Centralized Refresh**: `RefreshMonthAsync()` is the single entry point for calendar updates (load events, render grid, update header)
+- **Repository Pattern**: Data access abstraction layer for maintainability and testability
+- **Database Schema**: Automatically loaded and initialized on application startup from `Schema.sql`
 - **Git Repository**: Primary branch is `main` with remote at `origin`
+
+### Month Navigation Flow
+```
+User clicks [Previous/Next/Today] button
+        ↓
+Event handler updates _displayMonth
+        ↓
+Calls RefreshMonthAsync()
+        ↓
+LoadEventsAsync() → queries EventRepository.GetInRangeAsync()
+        ↓
+RenderDayHeaders() → renders day names (Sun–Sat)
+        ↓
+RenderCalendarGrid() → creates grid cells, wires click handlers, renders events
+        ↓
+UpdateMonthYearHeader() → updates TextBlock to display month/year
+        ↓
+UI updated
+```
+
+### Event Creation Flow
+```
+User clicks day cell
+        ↓
+ShowCreateEventDialogAsync() opens dialog
+        ↓
+User fills title, selects calendar, picks times
+        ↓
+User clicks "Save"
+        ↓
+Validate event (title required, end ≥ start)
+        ↓
+EventRepository.InsertAsync() persists to SQLite
+        ↓
+RefreshMonthAsync() reloads and rerenders calendar
+        ↓
+Dialog closes, calendar updated with new event
+```
 
