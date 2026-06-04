@@ -15,13 +15,20 @@ namespace Chronicle
     {
         private readonly EventRepository _eventRepository = new();
         private readonly CalendarRepository _calendarRepository = new();
-        private DateTime _currentMonth;
+        private DateTime _displayMonth;
         private Dictionary<DateTime, List<Event>> _eventsByDate = new();
 
         public MainWindow()
         {
             InitializeComponent();
-            _currentMonth = DateTime.Now;
+            // Initialize to first day of current month
+            var now = DateTime.Now;
+            _displayMonth = new DateTime(now.Year, now.Month, 1);
+
+            // Wire up navigation button handlers
+            PrevMonthButton.Click += PrevMonthButton_Click;
+            NextMonthButton.Click += NextMonthButton_Click;
+            TodayButton.Click += TodayButton_Click;
 
             // Initialize calendar after window is fully loaded
             DispatcherQueue.TryEnqueue(async () => await InitializeCalendarAsync());
@@ -31,14 +38,44 @@ namespace Chronicle
         {
             try
             {
-                await LoadEventsAsync();
-                RenderCalendarGrid();
-                RenderDayHeaders();
+                await RefreshMonthAsync();
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Error initializing calendar: {ex.Message}\n{ex.StackTrace}");
             }
+        }
+
+        private async Task RefreshMonthAsync()
+        {
+            await LoadEventsAsync();
+            RenderDayHeaders();
+            RenderCalendarGrid();
+            UpdateMonthYearHeader();
+        }
+
+        private void UpdateMonthYearHeader()
+        {
+            MonthYearText.Text = _displayMonth.ToString("MMMM yyyy");
+        }
+
+        private async void PrevMonthButton_Click(object sender, RoutedEventArgs e)
+        {
+            _displayMonth = _displayMonth.AddMonths(-1);
+            await RefreshMonthAsync();
+        }
+
+        private async void NextMonthButton_Click(object sender, RoutedEventArgs e)
+        {
+            _displayMonth = _displayMonth.AddMonths(1);
+            await RefreshMonthAsync();
+        }
+
+        private async void TodayButton_Click(object sender, RoutedEventArgs e)
+        {
+            var now = DateTime.Now;
+            _displayMonth = new DateTime(now.Year, now.Month, 1);
+            await RefreshMonthAsync();
         }
 
         /// <summary>
@@ -68,7 +105,7 @@ namespace Chronicle
 
         private DateTime GetCurrentMonthStartLocal()
         {
-            return new DateTime(_currentMonth.Year, _currentMonth.Month, 1, 0, 0, 0, DateTimeKind.Local);
+            return new DateTime(_displayMonth.Year, _displayMonth.Month, 1, 0, 0, 0, DateTimeKind.Local);
         }
 
         private static DateTime CombineLocalDateAndTimeAsUtc(DateTime date, TimeSpan time)
@@ -412,8 +449,7 @@ namespace Chronicle
                         await _eventRepository.InsertAsync(newEvent);
 
                         // Refresh calendar
-                        await LoadEventsAsync();
-                        RenderCalendarGrid();
+                        await RefreshMonthAsync();
                     }
                     catch (Exception ex)
                     {
