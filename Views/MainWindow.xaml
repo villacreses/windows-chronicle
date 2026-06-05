@@ -13,54 +13,77 @@
         <MicaBackdrop />
     </Window.SystemBackdrop>
 
-    <Grid x:Name="RootGrid" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}" Padding="20">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-        </Grid.RowDefinitions>
+    <!-- Root: Sidebar (fixed) | Main content (fills remaining space) -->
+    <Grid x:Name="RootGrid" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="220"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
 
-        <!-- Month Navigation Header -->
-        <Grid Grid.Row="0" Height="50" Margin="0,0,0,20">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto"/>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="Auto"/>
-            </Grid.ColumnDefinitions>
+        <!-- ═══════════════════════════════════════════════════════
+             Left Sidebar
+             ═══════════════════════════════════════════════════════ -->
+        <Border Grid.Column="0"
+                BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
+                BorderThickness="0,0,1,0"
+                Background="{ThemeResource LayerFillColorDefaultBrush}">
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <StackPanel x:Name="SidebarPanel" Padding="16,20,16,16" Spacing="4"/>
+            </ScrollViewer>
+        </Border>
 
-            <!-- Navigation Buttons (Left) -->
-            <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
-                <Button x:Name="PrevMonthButton" Content="Previous" Padding="12,6"/>
-                <Button x:Name="TodayButton" Content="Today" Padding="12,6"/>
-                <Button x:Name="NextMonthButton" Content="Next" Padding="12,6"/>
-            </StackPanel>
+        <!-- ═══════════════════════════════════════════════════════
+             Main Calendar Area
+             ═══════════════════════════════════════════════════════ -->
+        <Grid Grid.Column="1" Padding="20">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
 
-            <!-- Month/Year Text (Center) -->
-            <TextBlock 
-                x:Name="MonthYearText"
-                Grid.Column="1"
-                Text="June 2026" 
-                FontSize="28" 
-                FontWeight="Bold"
-                HorizontalAlignment="Center"
-                VerticalAlignment="Center"/>
+            <!-- Month Navigation Header -->
+            <Grid Grid.Row="0" Height="50" Margin="0,0,0,20">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- Navigation Buttons (Left) -->
+                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                    <Button x:Name="PrevMonthButton" Content="Previous" Padding="12,6"/>
+                    <Button x:Name="TodayButton" Content="Today" Padding="12,6"/>
+                    <Button x:Name="NextMonthButton" Content="Next" Padding="12,6"/>
+                </StackPanel>
+
+                <!-- Month/Year Text (Center) -->
+                <TextBlock
+                    x:Name="MonthYearText"
+                    Grid.Column="1"
+                    Text="June 2026"
+                    FontSize="28"
+                    FontWeight="Bold"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"/>
+            </Grid>
+
+            <!-- Day Name Headers (Sun–Sat) -->
+            <Grid x:Name="DayNamesGrid" Grid.Row="2" Height="40">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+            </Grid>
+
+            <!-- Calendar Grid (7 columns, variable rows) -->
+            <Grid x:Name="CalendarGrid" Grid.Row="3"/>
         </Grid>
-
-        <!-- Day Name Headers (Sun-Sat) -->
-        <Grid x:Name="DayNamesGrid" Grid.Row="2" Height="40">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="*"/>
-            </Grid.ColumnDefinitions>
-        </Grid>
-
-        <!-- Calendar Grid (7 columns, variable rows) -->
-        <Grid x:Name="CalendarGrid" Grid.Row="3"/>
     </Grid>
 </Window>

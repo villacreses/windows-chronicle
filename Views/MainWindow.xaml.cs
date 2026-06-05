@@ -15,36 +15,58 @@ namespace Chronicle
     {
         private readonly EventRepository _eventRepository = new();
         private readonly CalendarRepository _calendarRepository = new();
+
         private DateTime _displayMonth;
+
+        // Calendars are loaded once at startup and cached for sidebar rendering.
+        private List<Calendar> _allCalendars = new();
+
+        // In-memory visibility state: CalendarId → visible.
+        // Seeded to true for every calendar; resets on app restart (by design).
+        private Dictionary<Guid, bool> _calendarVisibility = new();
+
         private Dictionary<DateTime, List<Event>> _eventsByDate = new();
 
         public MainWindow()
         {
             InitializeComponent();
-            // Initialize to first day of current month
+
             var now = DateTime.Now;
             _displayMonth = new DateTime(now.Year, now.Month, 1);
 
-            // Wire up navigation button handlers
             PrevMonthButton.Click += PrevMonthButton_Click;
             NextMonthButton.Click += NextMonthButton_Click;
             TodayButton.Click += TodayButton_Click;
 
-            // Initialize calendar after window is fully loaded
             DispatcherQueue.TryEnqueue(async () => await InitializeCalendarAsync());
         }
+
+        // ── Initialization ────────────────────────────────────────────────────
 
         private async Task InitializeCalendarAsync()
         {
             try
             {
+                // Load calendars first so visibility state and sidebar are ready
+                // before RefreshMonthAsync filters events.
+                _allCalendars = await _calendarRepository.GetAllAsync();
+
+                // Seed every calendar as visible.
+                foreach (var cal in _allCalendars)
+                    _calendarVisibility.TryAdd(cal.Id, true);
+
+                RenderSidebar();
+
                 await RefreshMonthAsync();
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Error initializing calendar: {ex.Message}\n{ex.StackTrace}");
+                System.Diagnostics.Debug.WriteLine(
+                    $"Error initializing calendar: {ex.Message}\n{ex.StackTrace}");
             }
         }
+
+        // ── Month refresh (single re-render entry point) ──────────────────────
 
         private async Task RefreshMonthAsync()
         {
@@ -58,6 +80,8 @@ namespace Chronicle
         {
             MonthYearText.Text = _displayMonth.ToString("MMMM yyyy");
         }
+
+        // ── Navigation handlers ───────────────────────────────────────────────
 
         private async void PrevMonthButton_Click(object sender, RoutedEventArgs e)
         {
@@ -78,9 +102,101 @@ namespace Chronicle
             await RefreshMonthAsync();
         }
 
+        // ── Sidebar ───────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Builds the Calendars section in the sidebar from <see cref="_allCalendars"/>.
+        /// Called once at startup. Call again if calendars are ever added/removed via UI.
+        /// </summary>
+        private void RenderSidebar()
+        {
+            SidebarPanel.Children.Clear();
+
+            // Section header
+            SidebarPanel.Children.Add(new TextBlock
+            {
+                Text = "Calendars",
+                FontSize = 13,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = new SolidColorBrush(
+                    new Windows.UI.Color { A = 255, R = 100, G = 100, B = 100 }),
+                Margin = new Thickness(0, 0, 0, 8)
+            });
+
+            if (_allCalendars.Count == 0)
+            {
+                SidebarPanel.Children.Add(new TextBlock
+                {
+                    Text = "No calendars yet.",
+                    FontSize = 13,
+                    TextWrapping = TextWrapping.Wrap,
+                    Foreground = new SolidColorBrush(
+                        new Windows.UI.Color { A = 180, R = 120, G = 120, B = 120 })
+                });
+                return;
+            }
+
+            foreach (var cal in _allCalendars)
+            {
+                var capturedId = cal.Id;
+
+                // Color dot
+                var colorDot = new Border
+                {
+                    Width = 12,
+                    Height = 12,
+                    CornerRadius = new CornerRadius(6),
+                    Background = new SolidColorBrush(ParseHexColor(cal.Color)),
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+
+                // Calendar name
+                var nameBlock = new TextBlock
+                {
+                    Text = cal.Name,
+                    FontSize = 14,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    TextTrimming = TextTrimming.CharacterEllipsis
+                };
+
+                // Row content inside the CheckBox
+                var rowContent = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 8,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                rowContent.Children.Add(colorDot);
+                rowContent.Children.Add(nameBlock);
+
+                var checkBox = new CheckBox
+                {
+                    Content = rowContent,
+                    IsChecked = _calendarVisibility.GetValueOrDefault(capturedId, true),
+                    Padding = new Thickness(4, 6, 4, 6)
+                };
+
+                checkBox.Checked += async (s, e) =>
+                {
+                    _calendarVisibility[capturedId] = true;
+                    await RefreshMonthAsync();
+                };
+
+                checkBox.Unchecked += async (s, e) =>
+                {
+                    _calendarVisibility[capturedId] = false;
+                    await RefreshMonthAsync();
+                };
+
+                SidebarPanel.Children.Add(checkBox);
+            }
+        }
+
+        // ── Date/time helpers ─────────────────────────────────────────────────
+
         /// <summary>
         /// Gets the local calendar date key for event grouping and lookup.
-        /// Event storage remains UTC, but the month grid is a local wall-clock calendar.
+        /// Event storage remains UTC; the month grid is a local wall-clock calendar.
         /// </summary>
         private static DateTime GetEventDayKey(DateTime utcDateTime)
         {
@@ -94,7 +210,7 @@ namespace Chronicle
 
         /// <summary>
         /// Gets the current month's start and end boundaries in UTC.
-        /// Single source of truth for month range calculations used across calendar rendering and event loading.
+        /// Single source of truth for month range calculations.
         /// </summary>
         private (DateTime startUtc, DateTime endUtc) GetCurrentMonthRangeUtc()
         {
@@ -105,34 +221,65 @@ namespace Chronicle
 
         private DateTime GetCurrentMonthStartLocal()
         {
-            return new DateTime(_displayMonth.Year, _displayMonth.Month, 1, 0, 0, 0, DateTimeKind.Local);
+            return new DateTime(
+                _displayMonth.Year, _displayMonth.Month, 1, 0, 0, 0, DateTimeKind.Local);
         }
 
         private static DateTime CombineLocalDateAndTimeAsUtc(DateTime date, TimeSpan time)
         {
             var localDateTime =
-                DateTime.SpecifyKind(
-                    date.Date.Add(time),
-                    DateTimeKind.Local);
+                DateTime.SpecifyKind(date.Date.Add(time), DateTimeKind.Local);
 
             return localDateTime.ToUniversalTime();
         }
 
+        /// <summary>
+        /// Parses a "#RRGGBB" hex color string into a <see cref="Windows.UI.Color"/>.
+        /// Falls back to a neutral blue if the string is malformed.
+        /// </summary>
+        private static Windows.UI.Color ParseHexColor(string hex)
+        {
+            try
+            {
+                var s = hex.TrimStart('#');
+                return new Windows.UI.Color
+                {
+                    A = 255,
+                    R = Convert.ToByte(s[0..2], 16),
+                    G = Convert.ToByte(s[2..4], 16),
+                    B = Convert.ToByte(s[4..6], 16)
+                };
+            }
+            catch
+            {
+                return new Windows.UI.Color { A = 255, R = 59, G = 130, B = 246 }; // #3B82F6
+            }
+        }
+
+        // ── Event loading ─────────────────────────────────────────────────────
+
         private async Task LoadEventsAsync()
         {
             var (monthStart, monthEnd) = GetCurrentMonthRangeUtc();
-
-            // Fetch events for the month
             var events = await _eventRepository.GetInRangeAsync(monthStart, monthEnd);
 
-            // Group events by date using explicit day key extraction
-            _eventsByDate = events
+            // Filter to calendars that are currently visible.
+            // If _calendarVisibility is empty (no calendars), everything passes through.
+            var visible = events
+                .Where(e => _calendarVisibility.Count == 0
+                            || _calendarVisibility.GetValueOrDefault(e.CalendarId, true));
+
+            _eventsByDate = visible
                 .GroupBy(e => GetEventDayKey(e.StartTimeUtc))
                 .ToDictionary(g => g.Key, g => g.ToList());
         }
 
+        // ── Calendar grid rendering ───────────────────────────────────────────
+
         private void RenderDayHeaders()
         {
+            DayNamesGrid.Children.Clear();
+
             var dayNames = new[] { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
 
             for (int i = 0; i < 7; i++)
@@ -144,7 +291,8 @@ namespace Chronicle
                     FontWeight = FontWeights.SemiBold,
                     HorizontalAlignment = HorizontalAlignment.Center,
                     VerticalAlignment = VerticalAlignment.Center,
-                    Foreground = new SolidColorBrush(new Windows.UI.Color { A = 255, R = 100, G = 100, B = 100 })
+                    Foreground = new SolidColorBrush(
+                        new Windows.UI.Color { A = 255, R = 100, G = 100, B = 100 })
                 };
 
                 Grid.SetColumn(textBlock, i);
@@ -158,26 +306,19 @@ namespace Chronicle
             CalendarGrid.ColumnDefinitions.Clear();
             CalendarGrid.RowDefinitions.Clear();
 
-            // Setup column definitions (7 columns for days of week)
             for (int i = 0; i < 7; i++)
-            {
-                CalendarGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            }
+                CalendarGrid.ColumnDefinitions.Add(
+                    new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
-            // Calculate grid layout using centralized month range
             var monthStart = GetCurrentMonthStartLocal();
             var firstDayOfWeek = (int)monthStart.DayOfWeek;
             var daysInMonth = DateTime.DaysInMonth(monthStart.Year, monthStart.Month);
-            var totalCells = firstDayOfWeek + daysInMonth;
-            var weeks = (int)Math.Ceiling(totalCells / 7.0);
+            var weeks = (int)Math.Ceiling((firstDayOfWeek + daysInMonth) / 7.0);
 
-            // Setup row definitions
             for (int i = 0; i < weeks; i++)
-            {
-                CalendarGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-            }
+                CalendarGrid.RowDefinitions.Add(
+                    new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
 
-            // Populate calendar cells
             int cellIndex = 0;
             for (int week = 0; week < weeks; week++)
             {
@@ -192,14 +333,17 @@ namespace Chronicle
             }
         }
 
-        private Border CreateDayCell(int cellIndex, int firstDayOfWeek, int daysInMonth, DateTime monthStart)
+        private Border CreateDayCell(
+            int cellIndex, int firstDayOfWeek, int daysInMonth, DateTime monthStart)
         {
             var border = new Border
             {
-                BorderBrush = new SolidColorBrush(new Windows.UI.Color { A = 200, R = 220, G = 220, B = 220 }),
+                BorderBrush = new SolidColorBrush(
+                    new Windows.UI.Color { A = 200, R = 220, G = 220, B = 220 }),
                 BorderThickness = new Thickness(1),
                 Margin = new Thickness(2),
-                Background = new SolidColorBrush(new Windows.UI.Color { A = 255, R = 255, G = 255, B = 255 })
+                Background = new SolidColorBrush(
+                    new Windows.UI.Color { A = 255, R = 255, G = 255, B = 255 })
             };
 
             var stackPanel = new StackPanel
@@ -209,49 +353,45 @@ namespace Chronicle
                 Spacing = 4
             };
 
-            // Determine if this cell is in the current month
-            bool isInMonth = cellIndex >= firstDayOfWeek && cellIndex < firstDayOfWeek + daysInMonth;
+            bool isInMonth =
+                cellIndex >= firstDayOfWeek && cellIndex < firstDayOfWeek + daysInMonth;
 
             if (isInMonth)
             {
                 int dayNumber = cellIndex - firstDayOfWeek + 1;
                 var dayDate = GetLocalDayKey(monthStart.AddDays(dayNumber - 1));
 
-                // Day number header
-                var dayTextBlock = new TextBlock
+                stackPanel.Children.Add(new TextBlock
                 {
                     Text = dayNumber.ToString(),
                     FontSize = 16,
                     FontWeight = FontWeights.SemiBold,
-                    Foreground = new SolidColorBrush(new Windows.UI.Color { A = 255, R = 0, G = 0, B = 0 })
-                };
-                stackPanel.Children.Add(dayTextBlock);
+                    Foreground = new SolidColorBrush(
+                        new Windows.UI.Color { A = 255, R = 0, G = 0, B = 0 })
+                });
 
-                // Add events for this day
                 if (_eventsByDate.TryGetValue(dayDate, out var events))
-                {
                     stackPanel.Children.Add(CreateEventList(events));
-                }
 
-                // Make valid month days clickable
                 border.PointerPressed += async (s, e) =>
-                {
                     await ShowCreateEventDialogAsync(dayDate);
-                };
             }
             else
             {
-                // Empty cell (previous/next month)
-                border.Background = new SolidColorBrush(new Windows.UI.Color { A = 255, R = 245, G = 245, B = 245 });
+                border.Background = new SolidColorBrush(
+                    new Windows.UI.Color { A = 255, R = 245, G = 245, B = 245 });
             }
 
             border.Child = stackPanel;
             return border;
         }
 
+        // ── Event list inside a day cell ──────────────────────────────────────
+
         /// <summary>
-        /// Creates a scrollable UI element containing the list of events for a day.
-        /// Each event chip is clickable and opens the edit dialog without bubbling to the day cell.
+        /// Creates a scrollable list of event chips for a single day cell.
+        /// Each chip is clickable and opens the edit dialog; pointer events are
+        /// marked Handled to prevent the day-cell create-dialog from also firing.
         /// </summary>
         private UIElement CreateEventList(List<Event> events)
         {
@@ -271,16 +411,18 @@ namespace Chronicle
             {
                 var capturedEvt = evt;
 
+                // Resolve the calendar color for this event (falls back to blue).
+                var calColor = ResolveCalendarColor(capturedEvt.CalendarId);
+
                 var eventTextBlock = new TextBlock
                 {
                     Text = capturedEvt.Title,
                     FontSize = 11,
                     TextWrapping = TextWrapping.Wrap,
-                    Foreground = new SolidColorBrush(new Windows.UI.Color { A = 255, R = 33, G = 150, B = 243 }),
+                    Foreground = new SolidColorBrush(calColor),
                     Margin = new Thickness(0, 0, 0, 2)
                 };
 
-                // Wrap in a Border so pointer events are catchable and we can stop bubbling
                 var chip = new Border
                 {
                     Child = eventTextBlock,
@@ -289,7 +431,7 @@ namespace Chronicle
 
                 chip.PointerPressed += async (s, e) =>
                 {
-                    e.Handled = true; // prevent the day-cell PointerPressed from firing
+                    e.Handled = true;
                     await ShowEditEventDialogAsync(capturedEvt);
                 };
 
@@ -298,13 +440,13 @@ namespace Chronicle
 
             if (events.Count > 5)
             {
-                var moreTextBlock = new TextBlock
+                eventsPanel.Children.Add(new TextBlock
                 {
                     Text = $"+{events.Count - 5} more",
                     FontSize = 10,
-                    Foreground = new SolidColorBrush(new Windows.UI.Color { A = 200, R = 128, G = 128, B = 128 })
-                };
-                eventsPanel.Children.Add(moreTextBlock);
+                    Foreground = new SolidColorBrush(
+                        new Windows.UI.Color { A = 200, R = 128, G = 128, B = 128 })
+                });
             }
 
             scrollViewer.Content = eventsPanel;
@@ -312,9 +454,23 @@ namespace Chronicle
         }
 
         /// <summary>
-        /// Builds the shared form panel used by both the create and edit dialogs.
-        /// Returns the panel, controls, and a getter delegate for the currently-selected calendar
-        /// (avoids ref parameters which cannot be captured in lambdas).
+        /// Returns the <see cref="Windows.UI.Color"/> for the given calendar,
+        /// using the cached <see cref="_allCalendars"/> list. Falls back to blue.
+        /// </summary>
+        private Windows.UI.Color ResolveCalendarColor(Guid calendarId)
+        {
+            var cal = _allCalendars.FirstOrDefault(c => c.Id == calendarId);
+            return cal is not null
+                ? ParseHexColor(cal.Color)
+                : new Windows.UI.Color { A = 255, R = 33, G = 150, B = 243 };
+        }
+
+        // ── Shared dialog form ────────────────────────────────────────────────
+
+        /// <summary>
+        /// Builds the shared form panel used by both Create and Edit dialogs.
+        /// Returns a getter delegate for the currently-selected calendar to avoid
+        /// ref parameters (which cannot be captured inside lambdas).
         /// </summary>
         private (StackPanel panel,
                  TextBox titleBox,
@@ -329,7 +485,7 @@ namespace Chronicle
                 TimeSpan initialEnd,
                 int initialCalendarIndex)
         {
-            // Use a single-element array so lambdas can mutate the "selected calendar" value
+            // Single-element array lets lambdas mutate the selected-calendar slot.
             var selectedHolder = new Calendar[] { calendars[initialCalendarIndex] };
 
             var contentPanel = new StackPanel
@@ -354,7 +510,8 @@ namespace Chronicle
                 {
                     Text = $"Calendar: {calendars[0].Name}",
                     FontSize = 14,
-                    Foreground = new SolidColorBrush(new Windows.UI.Color { A = 255, R = 100, G = 100, B = 100 })
+                    Foreground = new SolidColorBrush(
+                        new Windows.UI.Color { A = 255, R = 100, G = 100, B = 100 })
                 });
             }
             else
@@ -387,14 +544,18 @@ namespace Chronicle
 
             var errorTextBlock = new TextBlock
             {
-                Foreground = new SolidColorBrush(new Windows.UI.Color { A = 255, R = 196, G = 43, B = 28 }),
+                Foreground = new SolidColorBrush(
+                    new Windows.UI.Color { A = 255, R = 196, G = 43, B = 28 }),
                 TextWrapping = TextWrapping.Wrap,
                 Visibility = Visibility.Collapsed
             };
             contentPanel.Children.Add(errorTextBlock);
 
-            return (contentPanel, titleTextBox, startTimePicker, endTimePicker, errorTextBlock, () => selectedHolder[0]);
+            return (contentPanel, titleTextBox, startTimePicker, endTimePicker,
+                    errorTextBlock, () => selectedHolder[0]);
         }
+
+        // ── Create Event dialog ───────────────────────────────────────────────
 
         private async Task ShowCreateEventDialogAsync(DateTime selectedDay)
         {
@@ -404,14 +565,13 @@ namespace Chronicle
 
                 if (calendars.Count == 0)
                 {
-                    var errorDialog = new ContentDialog
+                    await new ContentDialog
                     {
                         Title = "No Calendars",
                         Content = "Please create a calendar before adding events.",
                         CloseButtonText = "OK",
                         XamlRoot = this.Content.XamlRoot
-                    };
-                    await errorDialog.ShowAsync();
+                    }.ShowAsync();
                     return;
                 }
 
@@ -488,9 +648,12 @@ namespace Chronicle
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Error showing create event dialog: {ex.Message}\n{ex.StackTrace}");
+                System.Diagnostics.Debug.WriteLine(
+                    $"Error showing create event dialog: {ex.Message}\n{ex.StackTrace}");
             }
         }
+
+        // ── Edit Event dialog ─────────────────────────────────────────────────
 
         private async Task ShowEditEventDialogAsync(Event evt)
         {
@@ -507,10 +670,8 @@ namespace Chronicle
                     XamlRoot = this.Content.XamlRoot
                 };
 
-                // Determine which calendar is currently assigned
                 int calendarIndex = Math.Max(0, calendars.FindIndex(c => c.Id == evt.CalendarId));
 
-                // Convert stored UTC times to local for display
                 var startLocal = evt.StartTimeUtc.ToLocalTime();
                 var endLocal = evt.EndTimeUtc.ToLocalTime();
                 var selectedDay = GetLocalDayKey(startLocal);
@@ -525,7 +686,7 @@ namespace Chronicle
 
                 dialog.Content = panel;
 
-                // Save handler
+                // Save
                 dialog.PrimaryButtonClick += async (s, e) =>
                 {
                     var deferral = e.GetDeferral();
@@ -567,7 +728,8 @@ namespace Chronicle
                     }
                 };
 
-                // Delete handler: confirm inline because WinUI allows only one open ContentDialog.
+                // Delete: two-step confirmation using the secondary button text,
+                // because WinUI 3 only allows one ContentDialog open at a time.
                 var deleteConfirmationRequested = false;
 
                 dialog.SecondaryButtonClick += async (s, e) =>
@@ -583,7 +745,8 @@ namespace Chronicle
                             deleteConfirmationRequested = true;
                             e.Cancel = true;
                             dialog.SecondaryButtonText = "Confirm Delete";
-                            errorBlock.Text = $"Click Confirm Delete to permanently delete \"{evt.Title}\".";
+                            errorBlock.Text =
+                                $"Click \"Confirm Delete\" to permanently delete \"{evt.Title}\".";
                             errorBlock.Visibility = Visibility.Visible;
                             return;
                         }
@@ -608,7 +771,8 @@ namespace Chronicle
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Error showing edit event dialog: {ex.Message}\n{ex.StackTrace}");
+                System.Diagnostics.Debug.WriteLine(
+                    $"Error showing edit event dialog: {ex.Message}\n{ex.StackTrace}");
             }
         }
     }

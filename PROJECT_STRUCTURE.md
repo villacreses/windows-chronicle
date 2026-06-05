@@ -7,11 +7,13 @@
 - Display events in a traditional month-view calendar grid
 - Load events from SQLite database
 - Create new events via dialog UI
+- **Edit existing events** (new)
+- **Delete events with confirmation** (new)
 - Navigate between months with Previous/Next/Today buttons
 - Support for multiple calendars with distinct colors
 - All event times stored in UTC with timezone-aware conversion
 
-**Status:** Active development on core UI and navigation workflows. Foundational database schema supports future features like recurring events and event editing, though these workflows are not yet fully implemented in the UI.
+**Status:** Active development on core UI and navigation workflows. Foundational database schema supports future features like recurring events, though these workflows are not yet fully implemented in the UI.
 
 - **Framework**: .NET 8.0 (Windows 10.0.19041.0+)
 - **UI Framework**: WinUI 3 (Windows App SDK 2.1.3)
@@ -97,6 +99,7 @@ Chronicle/
   - Dynamic month/year header display
   - Day-of-week headers (Sun–Sat)
   - Click-on-day creates event dialog
+  - **Click-on-event opens edit dialog** (new)
   - Events rendered as clickable text items within day cells
 
 ### 2. **Data Access Layer** (`Data/`)
@@ -108,6 +111,8 @@ Chronicle/
 - **Repositories**: Repository pattern for data access
   - `EventRepository`: 
     - `InsertAsync()` - Create new events
+    - `UpdateAsync()` - Update existing events (new)
+    - `DeleteAsync()` - Delete events (new)
     - `GetInRangeAsync()` - Query events by date range (used for month view)
     - Supports both one-time and recurring event queries (infrastructure present, UI not yet implemented)
   - `CalendarRepository`: Create/read calendars
@@ -268,6 +273,14 @@ The main calendar view consists of:
    - Validation: Title required, end time ≥ start time
    - Saves event and refreshes calendar view
 
+5. **Event Edit Dialog** (modal) (new)
+   - Triggered when user clicks an existing event in the calendar
+   - Pre-populated fields: Event title, Calendar selection, Start time, End time
+   - Primary button: "Save" - persists changes and refreshes calendar
+   - Secondary button: "Delete" - two-step confirmation to prevent accidental deletion
+   - Validation: Same as creation dialog
+   - Event changes update UpdatedAtUtc timestamp
+
 ---
 
 ## Current Capabilities
@@ -281,6 +294,8 @@ The main calendar view consists of:
 
 **Event Management:**
 - Create new events via dialog
+- **Edit existing events via dialog** (new)
+- **Delete events with confirmation** (new)
 - Specify event title
 - Specify start and end times (time pickers)
 - Assign event to a calendar (from dropdown)
@@ -305,8 +320,6 @@ The main calendar view consists of:
 
 ## Known Limitations
 
-- **No event editing**: Once created, events cannot be modified via UI
-- **No event deletion**: Events cannot be deleted via UI
 - **No recurring event UI**: The database supports recurrence rules (JSON), but the UI does not provide:
   - UI to create recurring events
   - Expansion/rendering of recurring event instances
@@ -324,16 +337,16 @@ The main calendar view consists of:
 
 Likely candidates for future implementation:
 
-1. **Event Editing** - Modify existing event details (title, time, calendar)
-2. **Event Deletion** - Remove events with confirmation dialog
-3. **Recurring Events UI** - Create and expand recurring events in calendar view
-4. **Week View** - Alternative layout showing 7-day grid with hourly slots
-5. **External Calendar Sync** - Integrate with Google Calendar, Outlook, or iCalendar feeds
-6. **Event Details Panel** - View/edit full event details including description
-7. **Search/Filter** - Find events by keyword or date range
-8. **Drag-and-Reschedule** - Move events between days or adjust times via drag-drop
-9. **Themes/Customization** - Light/dark mode, calendar color themes
-10. **Notifications** - Event reminders at configurable intervals
+1. **Recurring Events UI** - Create and expand recurring events in calendar view
+2. **Week View** - Alternative layout showing 7-day grid with hourly slots
+3. **External Calendar Sync** - Integrate with Google Calendar, Outlook, or iCalendar feeds
+4. **Event Details Panel** - View/edit full event details including description
+5. **Search/Filter** - Find events by keyword or date range
+6. **Drag-and-Reschedule** - Move events between days or adjust times via drag-drop
+7. **Themes/Customization** - Light/dark mode, calendar color themes
+8. **Notifications** - Event reminders at configurable intervals
+9. **Multi-day Events** - Support spanning events with better rendering
+10. **Event Categories/Tags** - Organize events beyond calendar grouping
 
 ---
 
@@ -386,5 +399,38 @@ EventRepository.InsertAsync() persists to SQLite
 RefreshMonthAsync() reloads and rerenders calendar
         ↓
 Dialog closes, calendar updated with new event
+```
+
+### Event Edit/Delete Flow (new)
+```
+User clicks event text in calendar
+        ↓
+CreateEventList() click handler fires (e.Handled=true to prevent day-cell click)
+        ↓
+ShowEditEventDialogAsync(evt) opens dialog with pre-populated fields
+        ↓
+User modifies title, calendar, times, then clicks "Save"
+        ↓
+Validate event and update UpdatedAtUtc timestamp
+        ↓
+EventRepository.UpdateAsync() persists changes to SQLite
+        ↓
+RefreshMonthAsync() reloads and rerenders calendar
+        ↓
+Dialog closes, calendar reflects updated event
+```
+
+```
+User clicks "Delete" button in edit dialog (first click)
+        ↓
+Dialog shows confirmation message, changes button to "Confirm Delete"
+        ↓
+User clicks "Confirm Delete" (second click)
+        ↓
+EventRepository.DeleteAsync() removes from SQLite
+        ↓
+RefreshMonthAsync() reloads and rerenders calendar
+        ↓
+Dialog closes, event removed from calendar
 ```
 
