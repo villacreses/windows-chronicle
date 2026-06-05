@@ -251,7 +251,7 @@ namespace Chronicle
 
         /// <summary>
         /// Creates a scrollable UI element containing the list of events for a day.
-        /// Encapsulates event rendering logic: text formatting, overflow handling, and layout.
+        /// Each event chip is clickable and opens the edit dialog without bubbling to the day cell.
         /// </summary>
         private UIElement CreateEventList(List<Event> events)
         {
@@ -269,15 +269,31 @@ namespace Chronicle
 
             foreach (var evt in events.Take(5))
             {
+                var capturedEvt = evt;
+
                 var eventTextBlock = new TextBlock
                 {
-                    Text = evt.Title,
+                    Text = capturedEvt.Title,
                     FontSize = 11,
                     TextWrapping = TextWrapping.Wrap,
                     Foreground = new SolidColorBrush(new Windows.UI.Color { A = 255, R = 33, G = 150, B = 243 }),
                     Margin = new Thickness(0, 0, 0, 2)
                 };
-                eventsPanel.Children.Add(eventTextBlock);
+
+                // Wrap in a Border so pointer events are catchable and we can stop bubbling
+                var chip = new Border
+                {
+                    Child = eventTextBlock,
+                    Background = new SolidColorBrush(new Windows.UI.Color { A = 0, R = 0, G = 0, B = 0 })
+                };
+
+                chip.PointerPressed += async (s, e) =>
+                {
+                    e.Handled = true; // prevent the day-cell PointerPressed from firing
+                    await ShowEditEventDialogAsync(capturedEvt);
+                };
+
+                eventsPanel.Children.Add(chip);
             }
 
             if (events.Count > 5)
@@ -295,16 +311,99 @@ namespace Chronicle
             return scrollViewer;
         }
 
+        /// <summary>
+        /// Builds the shared form panel used by both the create and edit dialogs.
+        /// Returns the panel, controls, and a getter delegate for the currently-selected calendar
+        /// (avoids ref parameters which cannot be captured in lambdas).
+        /// </summary>
+        private (StackPanel panel,
+                 TextBox titleBox,
+                 TimePicker startPicker,
+                 TimePicker endPicker,
+                 TextBlock errorBlock,
+                 Func<Calendar> getSelectedCalendar)
+            BuildEventForm(
+                List<Calendar> calendars,
+                string initialTitle,
+                TimeSpan initialStart,
+                TimeSpan initialEnd,
+                int initialCalendarIndex)
+        {
+            // Use a single-element array so lambdas can mutate the "selected calendar" value
+            var selectedHolder = new Calendar[] { calendars[initialCalendarIndex] };
+
+            var contentPanel = new StackPanel
+            {
+                Orientation = Orientation.Vertical,
+                Spacing = 12
+            };
+
+            // Title
+            var titleTextBox = new TextBox
+            {
+                PlaceholderText = "Event title",
+                Text = initialTitle
+            };
+            contentPanel.Children.Add(new TextBlock { Text = "Title" });
+            contentPanel.Children.Add(titleTextBox);
+
+            // Calendar selection
+            if (calendars.Count == 1)
+            {
+                contentPanel.Children.Add(new TextBlock
+                {
+                    Text = $"Calendar: {calendars[0].Name}",
+                    FontSize = 14,
+                    Foreground = new SolidColorBrush(new Windows.UI.Color { A = 255, R = 100, G = 100, B = 100 })
+                });
+            }
+            else
+            {
+                var calendarComboBox = new ComboBox
+                {
+                    ItemsSource = calendars.Select(c => c.Name).ToList(),
+                    SelectedIndex = initialCalendarIndex
+                };
+
+                calendarComboBox.SelectionChanged += (s, e) =>
+                {
+                    if (calendarComboBox.SelectedIndex >= 0)
+                        selectedHolder[0] = calendars[calendarComboBox.SelectedIndex];
+                };
+
+                contentPanel.Children.Add(new TextBlock { Text = "Calendar" });
+                contentPanel.Children.Add(calendarComboBox);
+            }
+
+            // Start time
+            var startTimePicker = new TimePicker { Time = initialStart };
+            contentPanel.Children.Add(new TextBlock { Text = "Start Time" });
+            contentPanel.Children.Add(startTimePicker);
+
+            // End time
+            var endTimePicker = new TimePicker { Time = initialEnd };
+            contentPanel.Children.Add(new TextBlock { Text = "End Time" });
+            contentPanel.Children.Add(endTimePicker);
+
+            var errorTextBlock = new TextBlock
+            {
+                Foreground = new SolidColorBrush(new Windows.UI.Color { A = 255, R = 196, G = 43, B = 28 }),
+                TextWrapping = TextWrapping.Wrap,
+                Visibility = Visibility.Collapsed
+            };
+            contentPanel.Children.Add(errorTextBlock);
+
+            return (contentPanel, titleTextBox, startTimePicker, endTimePicker, errorTextBlock, () => selectedHolder[0]);
+        }
+
         private async Task ShowCreateEventDialogAsync(DateTime selectedDay)
         {
             try
             {
-                // Load calendars from database
                 var calendars = await _calendarRepository.GetAllAsync();
 
                 if (calendars.Count == 0)
                 {
-                    // No calendars exist - show error
                     var errorDialog = new ContentDialog
                     {
                         Title = "No Calendars",
@@ -316,7 +415,6 @@ namespace Chronicle
                     return;
                 }
 
-                // Create dialog
                 var dialog = new ContentDialog
                 {
                     Title = "Create Event",
@@ -325,118 +423,43 @@ namespace Chronicle
                     XamlRoot = this.Content.XamlRoot
                 };
 
-                // Create dialog content
-                var contentPanel = new StackPanel
-                {
-                    Orientation = Orientation.Vertical,
-                    Spacing = 12
-                };
+                var (panel, titleBox, startPicker, endPicker, errorBlock, getCalendar) =
+                    BuildEventForm(
+                        calendars,
+                        initialTitle: "",
+                        initialStart: new TimeSpan(9, 0, 0),
+                        initialEnd: new TimeSpan(10, 0, 0),
+                        initialCalendarIndex: 0);
 
-                // Title field
-                var titleTextBox = new TextBox
-                {
-                    PlaceholderText = "Event title",
-                    Text = ""
-                };
-                contentPanel.Children.Add(new TextBlock { Text = "Title" });
-                contentPanel.Children.Add(titleTextBox);
+                dialog.Content = panel;
 
-                // Calendar selection
-                Calendar selectedCalendar = calendars[0];
-
-                if (calendars.Count == 1)
-                {
-                    // Auto-select single calendar
-                    contentPanel.Children.Add(new TextBlock
-                    {
-                        Text = $"Calendar: {calendars[0].Name}",
-                        FontSize = 14,
-                        Foreground = new SolidColorBrush(new Windows.UI.Color { A = 255, R = 100, G = 100, B = 100 })
-                    });
-                }
-                else
-                {
-                    // Show ComboBox for multiple calendars
-                    var calendarComboBox = new ComboBox
-                    {
-                        ItemsSource = calendars.Select(c => c.Name).ToList()
-                    };
-                    calendarComboBox.SelectedIndex = 0;
-                    calendarComboBox.SelectionChanged += (s, e) =>
-                    {
-                        if (calendarComboBox.SelectedIndex >= 0)
-                        {
-                            selectedCalendar = calendars[calendarComboBox.SelectedIndex];
-                        }
-                    };
-                    contentPanel.Children.Add(new TextBlock { Text = "Calendar" });
-                    contentPanel.Children.Add(calendarComboBox);
-                }
-
-                // Start time
-                var startTimePicker = new TimePicker
-                {
-                    Time = new TimeSpan(9, 0, 0) // 9:00 AM default
-                };
-                contentPanel.Children.Add(new TextBlock { Text = "Start Time" });
-                contentPanel.Children.Add(startTimePicker);
-
-                // End time
-                var endTimePicker = new TimePicker
-                {
-                    Time = new TimeSpan(10, 0, 0) // 10:00 AM default
-                };
-                contentPanel.Children.Add(new TextBlock { Text = "End Time" });
-                contentPanel.Children.Add(endTimePicker);
-
-                var errorTextBlock = new TextBlock
-                {
-                    Foreground = new SolidColorBrush(new Windows.UI.Color { A = 255, R = 196, G = 43, B = 28 }),
-                    TextWrapping = TextWrapping.Wrap,
-                    Visibility = Visibility.Collapsed
-                };
-                contentPanel.Children.Add(errorTextBlock);
-
-                dialog.Content = contentPanel;
-
-                // Handle save
                 dialog.PrimaryButtonClick += async (s, e) =>
                 {
                     var deferral = e.GetDeferral();
                     dialog.IsPrimaryButtonEnabled = false;
-                    errorTextBlock.Visibility = Visibility.Collapsed;
+                    errorBlock.Visibility = Visibility.Collapsed;
 
                     try
                     {
-                        var title = titleTextBox.Text?.Trim();
+                        var title = titleBox.Text?.Trim();
 
                         if (string.IsNullOrEmpty(title))
                         {
                             e.Cancel = true;
-                            errorTextBlock.Text = "Event title is required.";
-                            errorTextBlock.Visibility = Visibility.Visible;
+                            errorBlock.Text = "Event title is required.";
+                            errorBlock.Visibility = Visibility.Visible;
                             return;
                         }
-
-                        var startTimeUtc =
-                            CombineLocalDateAndTimeAsUtc(
-                                selectedDay,
-                                startTimePicker.Time);
-
-                        var endTimeUtc =
-                            CombineLocalDateAndTimeAsUtc(
-                                selectedDay,
-                                endTimePicker.Time);
 
                         var nowUtc = DateTime.UtcNow;
 
                         var newEvent = new Event
                         {
                             Id = Guid.NewGuid(),
-                            CalendarId = selectedCalendar.Id,
+                            CalendarId = getCalendar().Id,
                             Title = title,
-                            StartTimeUtc = startTimeUtc,
-                            EndTimeUtc = endTimeUtc,
+                            StartTimeUtc = CombineLocalDateAndTimeAsUtc(selectedDay, startPicker.Time),
+                            EndTimeUtc = CombineLocalDateAndTimeAsUtc(selectedDay, endPicker.Time),
                             Description = null,
                             IsAllDay = false,
                             RecurrenceRuleJson = null,
@@ -444,18 +467,15 @@ namespace Chronicle
                             UpdatedAtUtc = nowUtc
                         };
 
-                        // Validate and persist
                         newEvent.Validate();
                         await _eventRepository.InsertAsync(newEvent);
-
-                        // Refresh calendar
                         await RefreshMonthAsync();
                     }
                     catch (Exception ex)
                     {
                         e.Cancel = true;
-                        errorTextBlock.Text = ex.Message;
-                        errorTextBlock.Visibility = Visibility.Visible;
+                        errorBlock.Text = ex.Message;
+                        errorBlock.Visibility = Visibility.Visible;
                     }
                     finally
                     {
@@ -469,6 +489,126 @@ namespace Chronicle
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Error showing create event dialog: {ex.Message}\n{ex.StackTrace}");
+            }
+        }
+
+        private async Task ShowEditEventDialogAsync(Event evt)
+        {
+            try
+            {
+                var calendars = await _calendarRepository.GetAllAsync();
+
+                var dialog = new ContentDialog
+                {
+                    Title = "Edit Event",
+                    PrimaryButtonText = "Save",
+                    SecondaryButtonText = "Delete",
+                    CloseButtonText = "Cancel",
+                    XamlRoot = this.Content.XamlRoot
+                };
+
+                // Determine which calendar is currently assigned
+                int calendarIndex = Math.Max(0, calendars.FindIndex(c => c.Id == evt.CalendarId));
+
+                // Convert stored UTC times to local for display
+                var startLocal = evt.StartTimeUtc.ToLocalTime();
+                var endLocal = evt.EndTimeUtc.ToLocalTime();
+                var selectedDay = GetLocalDayKey(startLocal);
+
+                var (panel, titleBox, startPicker, endPicker, errorBlock, getCalendar) =
+                    BuildEventForm(
+                        calendars,
+                        initialTitle: evt.Title,
+                        initialStart: startLocal.TimeOfDay,
+                        initialEnd: endLocal.TimeOfDay,
+                        initialCalendarIndex: calendarIndex);
+
+                dialog.Content = panel;
+
+                // Save handler
+                dialog.PrimaryButtonClick += async (s, e) =>
+                {
+                    var deferral = e.GetDeferral();
+                    dialog.IsPrimaryButtonEnabled = false;
+                    errorBlock.Visibility = Visibility.Collapsed;
+
+                    try
+                    {
+                        var title = titleBox.Text?.Trim();
+
+                        if (string.IsNullOrEmpty(title))
+                        {
+                            e.Cancel = true;
+                            errorBlock.Text = "Event title is required.";
+                            errorBlock.Visibility = Visibility.Visible;
+                            return;
+                        }
+
+                        evt.CalendarId = getCalendar().Id;
+                        evt.Title = title;
+                        evt.StartTimeUtc = CombineLocalDateAndTimeAsUtc(selectedDay, startPicker.Time);
+                        evt.EndTimeUtc = CombineLocalDateAndTimeAsUtc(selectedDay, endPicker.Time);
+                        evt.UpdatedAtUtc = DateTime.UtcNow;
+
+                        evt.Validate();
+                        await _eventRepository.UpdateAsync(evt);
+                        await RefreshMonthAsync();
+                    }
+                    catch (Exception ex)
+                    {
+                        e.Cancel = true;
+                        errorBlock.Text = ex.Message;
+                        errorBlock.Visibility = Visibility.Visible;
+                    }
+                    finally
+                    {
+                        dialog.IsPrimaryButtonEnabled = true;
+                        deferral.Complete();
+                    }
+                };
+
+                // Delete handler: confirm inline because WinUI allows only one open ContentDialog.
+                var deleteConfirmationRequested = false;
+
+                dialog.SecondaryButtonClick += async (s, e) =>
+                {
+                    var deferral = e.GetDeferral();
+                    dialog.IsSecondaryButtonEnabled = false;
+                    errorBlock.Visibility = Visibility.Collapsed;
+
+                    try
+                    {
+                        if (!deleteConfirmationRequested)
+                        {
+                            deleteConfirmationRequested = true;
+                            e.Cancel = true;
+                            dialog.SecondaryButtonText = "Confirm Delete";
+                            errorBlock.Text = $"Click Confirm Delete to permanently delete \"{evt.Title}\".";
+                            errorBlock.Visibility = Visibility.Visible;
+                            return;
+                        }
+
+                        await _eventRepository.DeleteAsync(evt.Id);
+                        await RefreshMonthAsync();
+                    }
+                    catch (Exception ex)
+                    {
+                        e.Cancel = true;
+                        errorBlock.Text = ex.Message;
+                        errorBlock.Visibility = Visibility.Visible;
+                    }
+                    finally
+                    {
+                        dialog.IsSecondaryButtonEnabled = true;
+                        deferral.Complete();
+                    }
+                };
+
+                await dialog.ShowAsync();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error showing edit event dialog: {ex.Message}\n{ex.StackTrace}");
             }
         }
     }

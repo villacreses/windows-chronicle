@@ -102,6 +102,59 @@ public sealed class EventRepository
         await command.ExecuteNonQueryAsync();
     }
 
+    public async Task UpdateAsync(Event evt)
+    {
+        evt.Validate();
+
+        using var connection =
+            AppDatabase.GetConnection();
+
+        using var command =
+            connection.CreateCommand();
+
+        command.CommandText =
+        """
+        UPDATE Events SET
+            CalendarId       = $calendarId,
+            Title            = $title,
+            Description      = $description,
+            StartTimeUtc     = $startTimeUtc,
+            EndTimeUtc       = $endTimeUtc,
+            IsAllDay         = $isAllDay,
+            RecurrenceRuleJson = $recurrenceRuleJson,
+            UpdatedAtUtc     = $updatedAtUtc
+        WHERE Id = $id;
+        """;
+
+        command.Parameters.AddWithValue("$id",               evt.Id.ToString());
+        command.Parameters.AddWithValue("$calendarId",       evt.CalendarId.ToString());
+        command.Parameters.AddWithValue("$title",            evt.Title);
+        command.Parameters.AddWithValue("$description",      (object?)evt.Description ?? DBNull.Value);
+        command.Parameters.AddWithValue("$startTimeUtc",     evt.StartTimeUtc.ToString("O"));
+        command.Parameters.AddWithValue("$endTimeUtc",       evt.EndTimeUtc.ToString("O"));
+        command.Parameters.AddWithValue("$isAllDay",         evt.IsAllDay ? 1 : 0);
+        command.Parameters.AddWithValue("$recurrenceRuleJson", (object?)evt.RecurrenceRuleJson ?? DBNull.Value);
+        command.Parameters.AddWithValue("$updatedAtUtc",     evt.UpdatedAtUtc.ToString("O"));
+
+        await command.ExecuteNonQueryAsync();
+    }
+
+    public async Task DeleteAsync(Guid id)
+    {
+        using var connection =
+            AppDatabase.GetConnection();
+
+        using var command =
+            connection.CreateCommand();
+
+        command.CommandText =
+            "DELETE FROM Events WHERE Id = $id;";
+
+        command.Parameters.AddWithValue("$id", id.ToString());
+
+        await command.ExecuteNonQueryAsync();
+    }
+
     public async Task<List<Event>> GetInRangeAsync(
         DateTime rangeStartUtc,
         DateTime rangeEndUtc)
