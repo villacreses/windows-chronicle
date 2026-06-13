@@ -14,17 +14,23 @@ Build the complete provider-agnostic calendar experience before beginning accoun
 - Event CRUD
 - Calendar visibility sidebar
 - MainWindow decomposition into rendering/dialog helper classes
+- Event popover (read-only summary before edit)
+- Mini Month Navigator
 
 ## Current Milestone
 
-Mini Month Navigator
+Calendar Management (see Next Milestones)
 
-Goals:
+## Recently Completed: Mini Month Navigator
 
-- Sidebar mini-month
-- Selected day state
-- Jump navigation
-- Today highlighting
+Delivered:
+
+- Sidebar mini-month with prev/next + month label
+- Selected-date state separate from displayed month (defaults to today)
+- Jump navigation (click a day; adjacent-month days advance the month)
+- Today and selected-date highlighting
+- Shared month-grid geometry (`DateHelpers.BuildMonthGrid`) reused by the
+  main grid and the mini month
 
 ## Next Milestones
 

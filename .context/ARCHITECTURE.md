@@ -66,12 +66,31 @@ handlers, and triggers refreshes. It does not build UI itself.
 Rendering and dialog construction live in dedicated, single-purpose classes
 under `Views/`:
 
-- `Views/Rendering/CalendarGridRenderer` — month grid and day cells
+- `Views/Rendering/CalendarGridRenderer` — main month grid and day cells
+- `Views/Rendering/MiniMonthRenderer` — compact sidebar month navigator
 - `Views/Rendering/SidebarRenderer` — calendar list/visibility sidebar
 - `Views/Dialogs/EventDialogService` — Create/Edit Event dialogs
+- `Views/Popovers/EventPopover` — read-only event summary popover
 
 Shared date/color conversions live in `Helpers/` (`DateHelpers`,
-`ColorHelper`) so rendering classes don't duplicate them.
+`ColorHelper`) so rendering classes don't duplicate them. Month-grid
+geometry (week count + Sunday-aligned cell dates) is produced once by
+`DateHelpers.BuildMonthGrid` and consumed by both the main grid and the
+mini month, so the two never drift apart.
+
+## Navigation State
+
+MainWindow owns two distinct pieces of navigation state, kept separate on
+purpose:
+
+- `_displayMonth` — the month both grids render.
+- `_selectedDate` — the user's focused day (defaults to today).
+
+This separation is the foundation future Week/Day/Agenda views build on:
+those views need a stable "focused date" independent of which month is
+shown. The mini month is the primary driver — clicking a day updates
+`_selectedDate` and, when the day is outside the current month, advances
+`_displayMonth` to match.
 
 These are plain classes instantiated directly by MainWindow — no DI
 container, event bus, or MVVM framework. See "Avoid Premature MVVM" in

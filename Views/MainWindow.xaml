@@ -28,7 +28,12 @@
                 BorderThickness="0,0,1,0"
                 Background="{ThemeResource LayerFillColorDefaultBrush}">
             <ScrollViewer VerticalScrollBarVisibility="Auto">
-                <StackPanel x:Name="SidebarPanel" Padding="16,20,16,16" Spacing="4"/>
+                <StackPanel Padding="16,20,16,16" Spacing="20">
+                    <!-- Mini Month Navigator -->
+                    <StackPanel x:Name="MiniMonthPanel" Spacing="2"/>
+                    <!-- Calendars list / visibility toggles -->
+                    <StackPanel x:Name="SidebarPanel" Spacing="4"/>
+                </StackPanel>
             </ScrollViewer>
         </Border>
 

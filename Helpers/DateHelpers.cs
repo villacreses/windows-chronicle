@@ -1,6 +1,30 @@
 using System;
+using System.Collections.Generic;
 
 namespace Chronicle.Helpers;
+
+/// <summary>
+/// The geometry of a traditional month grid: a Sunday-aligned block of
+/// whole weeks that fully contains the given month. Shared by the main
+/// calendar grid and the mini-month navigator so date math lives in one place.
+/// </summary>
+internal readonly record struct MonthGrid(DateTime FirstCellDate, int Weeks)
+{
+    /// <summary>Total cells in the grid (always a multiple of 7).</summary>
+    public int CellCount => Weeks * 7;
+
+    /// <summary>
+    /// Enumerates every cell's date, left-to-right then top-to-bottom,
+    /// starting from <see cref="FirstCellDate"/>. Dates outside the target
+    /// month are included (leading/trailing days); callers decide how to
+    /// render them via <see cref="DateHelpers.IsInMonth"/>.
+    /// </summary>
+    public IEnumerable<DateTime> Days()
+    {
+        for (int i = 0; i < CellCount; i++)
+            yield return FirstCellDate.AddDays(i);
+    }
+}
 
 /// <summary>
 /// Shared date/time conversions between UTC event storage and the
@@ -46,4 +70,28 @@ internal static class DateHelpers
 
         return localDateTime.ToUniversalTime();
     }
+
+    /// <summary>
+    /// Builds the month-grid geometry for <paramref name="displayMonth"/>:
+    /// a Sunday-aligned block of whole weeks containing the entire month.
+    /// <see cref="MonthGrid.FirstCellDate"/> is a local day key, so cell
+    /// dates can be used directly for event lookups.
+    /// </summary>
+    public static MonthGrid BuildMonthGrid(DateTime displayMonth)
+    {
+        var monthStart = GetMonthStartLocal(displayMonth);
+        var firstDayOfWeek = (int)monthStart.DayOfWeek;
+        var daysInMonth = DateTime.DaysInMonth(monthStart.Year, monthStart.Month);
+        var weeks = (int)Math.Ceiling((firstDayOfWeek + daysInMonth) / 7.0);
+        var firstCell = GetLocalDayKey(monthStart.AddDays(-firstDayOfWeek));
+        return new MonthGrid(firstCell, weeks);
+    }
+
+    /// <summary>True if <paramref name="date"/> falls in the same calendar month/year as <paramref name="month"/>.</summary>
+    public static bool IsInMonth(DateTime date, DateTime month)
+        => date.Year == month.Year && date.Month == month.Month;
+
+    /// <summary>True if both values fall on the same calendar day (ignores time and kind).</summary>
+    public static bool IsSameDay(DateTime a, DateTime b)
+        => a.Date == b.Date;
 }
