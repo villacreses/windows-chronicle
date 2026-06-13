@@ -46,6 +46,70 @@ public sealed class CalendarRepository
         await command.ExecuteNonQueryAsync();
     }
 
+    public async Task UpdateAsync(Calendar calendar)
+    {
+        using var connection =
+            AppDatabase.GetConnection();
+
+        using var command =
+            connection.CreateCommand();
+
+        command.CommandText =
+        """
+        UPDATE Calendars SET
+            Name  = $name,
+            Color = $color
+        WHERE Id = $id;
+        """;
+
+        command.Parameters.AddWithValue("$id", calendar.Id.ToString());
+        command.Parameters.AddWithValue("$name", calendar.Name);
+        command.Parameters.AddWithValue("$color", calendar.Color);
+
+        await command.ExecuteNonQueryAsync();
+    }
+
+    /// <summary>
+    /// Deletes a calendar and all of its events in a single transaction.
+    /// Events are cascade-deleted here (rather than relying on a schema
+    /// ON DELETE CASCADE) so existing databases work without migration and
+    /// the foreign-key constraint is never violated. See DECISIONS.md.
+    /// </summary>
+    public async Task DeleteAsync(Guid id)
+    {
+        using var connection =
+            AppDatabase.GetConnection();
+
+        using var transaction = connection.BeginTransaction();
+        try
+        {
+            using (var deleteEvents = connection.CreateCommand())
+            {
+                deleteEvents.Transaction = transaction;
+                deleteEvents.CommandText =
+                    "DELETE FROM Events WHERE CalendarId = $id;";
+                deleteEvents.Parameters.AddWithValue("$id", id.ToString());
+                await deleteEvents.ExecuteNonQueryAsync();
+            }
+
+            using (var deleteCalendar = connection.CreateCommand())
+            {
+                deleteCalendar.Transaction = transaction;
+                deleteCalendar.CommandText =
+                    "DELETE FROM Calendars WHERE Id = $id;";
+                deleteCalendar.Parameters.AddWithValue("$id", id.ToString());
+                await deleteCalendar.ExecuteNonQueryAsync();
+            }
+
+            transaction.Commit();
+        }
+        catch
+        {
+            transaction.Rollback();
+            throw;
+        }
+    }
+
     public async Task<List<Calendar>> GetAllAsync()
     {
         using var connection =

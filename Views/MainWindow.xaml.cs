@@ -23,6 +23,7 @@ namespace Chronicle
         private readonly CalendarGridRenderer _calendarGridRenderer;
         private readonly MiniMonthRenderer _miniMonthRenderer;
         private readonly EventDialogService _eventDialogService;
+        private readonly CalendarDialogService _calendarDialogService;
 
         private readonly EventPopover _eventPopover;
         private readonly Flyout _eventPopoverFlyout;
@@ -57,6 +58,8 @@ namespace Chronicle
             _miniMonthRenderer = new MiniMonthRenderer(MiniMonthPanel);
             _eventDialogService = new EventDialogService(
                 _eventRepository, _calendarRepository, () => Content.XamlRoot, RefreshMonthAsync);
+            _calendarDialogService = new CalendarDialogService(
+                _calendarRepository, _eventRepository, () => Content.XamlRoot, ReloadCalendarsAndRefreshAsync);
 
             _eventPopover = new EventPopover();
             _eventPopoverFlyout = new Flyout
@@ -82,23 +85,36 @@ namespace Chronicle
         {
             try
             {
-                // Load calendars first so visibility state and sidebar are ready
+                // Load calendars + sidebar first so visibility state is ready
                 // before RefreshMonthAsync filters events.
-                _allCalendars = await _calendarRepository.GetAllAsync();
-
-                // Seed every calendar as visible.
-                foreach (var cal in _allCalendars)
-                    _calendarVisibility.TryAdd(cal.Id, true);
-
-                RenderSidebar();
-
-                await RefreshMonthAsync();
+                await ReloadCalendarsAndRefreshAsync();
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine(
                     $"Error initializing calendar: {ex.Message}\n{ex.StackTrace}");
             }
+        }
+
+        /// <summary>
+        /// Reloads calendars from storage, reconciles the visibility map
+        /// (new calendars default to visible; deleted ones are dropped),
+        /// re-renders the sidebar, and refreshes the month views. Used at
+        /// startup and after any create/edit/delete calendar operation.
+        /// </summary>
+        private async Task ReloadCalendarsAndRefreshAsync()
+        {
+            _allCalendars = await _calendarRepository.GetAllAsync();
+
+            foreach (var cal in _allCalendars)
+                _calendarVisibility.TryAdd(cal.Id, true);
+
+            var existingIds = _allCalendars.Select(c => c.Id).ToHashSet();
+            foreach (var staleId in _calendarVisibility.Keys.Where(id => !existingIds.Contains(id)).ToList())
+                _calendarVisibility.Remove(staleId);
+
+            RenderSidebar();
+            await RefreshMonthAsync();
         }
 
         // ── Month refresh (single re-render entry point) ──────────────────────
@@ -143,17 +159,39 @@ namespace Chronicle
 
         /// <summary>
         /// Renders the Calendars section in the sidebar from <see cref="_allCalendars"/>.
-        /// Called once at startup. Call again if calendars are ever added/removed via UI.
         /// </summary>
         private void RenderSidebar()
         {
-            _sidebarRenderer.Render(_allCalendars, _calendarVisibility, OnCalendarVisibilityToggled);
+            _sidebarRenderer.Render(
+                _allCalendars,
+                _calendarVisibility,
+                OnCalendarVisibilityToggled,
+                OnAddCalendar,
+                OnEditCalendar,
+                OnDeleteCalendar);
         }
 
         private async void OnCalendarVisibilityToggled(Guid calendarId, bool isVisible)
         {
             _calendarVisibility[calendarId] = isVisible;
             await RefreshMonthAsync();
+        }
+
+        // ── Calendar management ───────────────────────────────────────────────
+
+        private async void OnAddCalendar()
+        {
+            await _calendarDialogService.ShowCreateCalendarDialogAsync();
+        }
+
+        private async void OnEditCalendar(Calendar calendar)
+        {
+            await _calendarDialogService.ShowEditCalendarDialogAsync(calendar);
+        }
+
+        private async void OnDeleteCalendar(Calendar calendar)
+        {
+            await _calendarDialogService.ShowDeleteCalendarDialogAsync(calendar);
         }
 
         // ── Mini month navigator ──────────────────────────────────────────────

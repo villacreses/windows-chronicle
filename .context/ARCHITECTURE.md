@@ -68,8 +68,10 @@ under `Views/`:
 
 - `Views/Rendering/CalendarGridRenderer` — main month grid and day cells
 - `Views/Rendering/MiniMonthRenderer` — compact sidebar month navigator
-- `Views/Rendering/SidebarRenderer` — calendar list/visibility sidebar
+- `Views/Rendering/SidebarRenderer` — calendar list, visibility toggles, and
+  the add / edit / delete calendar affordances
 - `Views/Dialogs/EventDialogService` — Create/Edit Event dialogs
+- `Views/Dialogs/CalendarDialogService` — Create/Edit/Delete Calendar dialogs
 - `Views/Popovers/EventPopover` — read-only event summary popover
 
 Shared date/color conversions live in `Helpers/` (`DateHelpers`,

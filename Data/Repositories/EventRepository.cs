@@ -155,6 +155,23 @@ public sealed class EventRepository
         await command.ExecuteNonQueryAsync();
     }
 
+    public async Task<int> CountByCalendarAsync(Guid calendarId)
+    {
+        using var connection =
+            AppDatabase.GetConnection();
+
+        using var command =
+            connection.CreateCommand();
+
+        command.CommandText =
+            "SELECT COUNT(*) FROM Events WHERE CalendarId = $id;";
+
+        command.Parameters.AddWithValue("$id", calendarId.ToString());
+
+        var result = await command.ExecuteScalarAsync();
+        return Convert.ToInt32(result, CultureInfo.InvariantCulture);
+    }
+
     public async Task<List<Event>> GetInRangeAsync(
         DateTime rangeStartUtc,
         DateTime rangeEndUtc)

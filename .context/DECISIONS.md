@@ -88,3 +88,28 @@ refresh orchestration.
 No new architectural pattern (MVVM, DI, event bus) was introduced, in
 keeping with "Avoid Premature MVVM." Behavior and repository usage are
 unchanged.
+
+---
+
+## Deleting a Calendar Cascade-Deletes Its Events
+
+Reason:
+
+The `Events.CalendarId` foreign key references `Calendars.Id` with foreign
+keys enforced (`PRAGMA foreign_keys = ON`). Deleting a calendar that still
+has events would otherwise violate the constraint. Two options were weighed:
+delete the events with the calendar, or reassign them to another calendar.
+
+Decision:
+
+Cascade-delete. It matches the user's mental model ("delete this calendar
+and everything in it") and is the simplest behavior consistent with the
+current architecture — reassignment would require a target-calendar picker
+and special handling when no other calendar exists.
+
+The cascade is performed in `CalendarRepository.DeleteAsync` inside a single
+transaction (DELETE events, then the calendar), rather than via a schema
+`ON DELETE CASCADE`. This keeps the operation in the repository layer, works
+on existing databases without a migration (the schema is `CREATE TABLE IF
+NOT EXISTS` only), and never trips the FK constraint. The delete dialog
+surfaces the affected event count so the action is never silent.

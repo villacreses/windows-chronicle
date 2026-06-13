@@ -16,30 +16,29 @@ Build the complete provider-agnostic calendar experience before beginning accoun
 - MainWindow decomposition into rendering/dialog helper classes
 - Event popover (read-only summary before edit)
 - Mini Month Navigator
+- Calendar Management (create / edit / delete / color)
 
 ## Current Milestone
 
-Calendar Management (see Next Milestones)
+Additional Views — Week view (see Next Milestones)
 
-## Recently Completed: Mini Month Navigator
+## Recently Completed: Calendar Management
 
 Delivered:
 
-- Sidebar mini-month with prev/next + month label
-- Selected-date state separate from displayed month (defaults to today)
-- Jump navigation (click a day; adjacent-month days advance the month)
-- Today and selected-date highlighting
-- Shared month-grid geometry (`DateHelpers.BuildMonthGrid`) reused by the
-  main grid and the mini month
+- Create calendar (name + preset color palette) from the sidebar header
+- Edit calendar (rename + recolor) via per-row overflow menu
+- Delete calendar with confirmation; cascade-deletes its events
+  (see DECISIONS.md) and surfaces the affected event count
+- Sidebar is now the management surface: "+" to add, "⋯" per row to
+  edit/delete
+- New `CalendarRepository.UpdateAsync`/`DeleteAsync` (transactional) and
+  `EventRepository.CountByCalendarAsync`; preset palette added to
+  `ColorHelper`
+- Consolidated startup + post-mutation reload into a single
+  `ReloadCalendarsAndRefreshAsync`
 
 ## Next Milestones
-
-### Calendar Management
-
-- Create calendar
-- Edit calendar
-- Delete calendar
-- Color selection
 
 ### Additional Views
 
