@@ -22,6 +22,7 @@ namespace Chronicle
         private readonly SidebarRenderer _sidebarRenderer;
         private readonly CalendarGridRenderer _calendarGridRenderer;
         private readonly MiniMonthRenderer _miniMonthRenderer;
+        private readonly SelectedDayRenderer _selectedDayRenderer;
         private readonly EventDialogService _eventDialogService;
         private readonly CalendarDialogService _calendarDialogService;
 
@@ -56,6 +57,7 @@ namespace Chronicle
             _sidebarRenderer = new SidebarRenderer(SidebarPanel);
             _calendarGridRenderer = new CalendarGridRenderer(DayNamesGrid, CalendarGrid);
             _miniMonthRenderer = new MiniMonthRenderer(MiniMonthPanel);
+            _selectedDayRenderer = new SelectedDayRenderer(SelectedDayPanel);
             _eventDialogService = new EventDialogService(
                 _eventRepository, _calendarRepository, () => Content.XamlRoot, RefreshMonthAsync);
             _calendarDialogService = new CalendarDialogService(
@@ -125,6 +127,7 @@ namespace Chronicle
             _calendarGridRenderer.RenderDayHeaders();
             RenderCalendarGrid();
             RenderMiniMonth();
+            RenderSelectedDay();
             UpdateMonthYearHeader();
         }
 
@@ -213,18 +216,15 @@ namespace Chronicle
         /// </summary>
         private async void OnMiniMonthDateSelected(DateTime date)
         {
-            var previousDate = _selectedDate;
-            _selectedDate = DateHelpers.GetLocalDayKey(date);
-
             if (!DateHelpers.IsInMonth(date, _displayMonth))
             {
+                _selectedDate = DateHelpers.GetLocalDayKey(date);
                 _displayMonth = new DateTime(date.Year, date.Month, 1);
                 await RefreshMonthAsync();
             }
             else
             {
-                _miniMonthRenderer.UpdateSelectedDate(previousDate, _selectedDate);
-                _calendarGridRenderer.UpdateSelectedDate(previousDate, _selectedDate);
+                SelectDate(date);
             }
         }
 
@@ -238,6 +238,37 @@ namespace Chronicle
         {
             _displayMonth = _displayMonth.AddMonths(1);
             await RefreshMonthAsync();
+        }
+
+        // ── Selected day ──────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Selects a day within the currently displayed month. Updates the
+        /// shared <see cref="_selectedDate"/> state and refreshes only what
+        /// depends on it (mini-month + grid highlights, selected-day panel) —
+        /// no event reload, since the day is already in the loaded month.
+        /// </summary>
+        private void SelectDate(DateTime date)
+        {
+            var previousDate = _selectedDate;
+            _selectedDate = DateHelpers.GetLocalDayKey(date);
+
+            _miniMonthRenderer.UpdateSelectedDate(previousDate, _selectedDate);
+            _calendarGridRenderer.UpdateSelectedDate(previousDate, _selectedDate);
+            RenderSelectedDay();
+        }
+
+        private void RenderSelectedDay()
+        {
+            var dayKey = DateHelpers.GetLocalDayKey(_selectedDate);
+            var events = _eventsByDate.GetValueOrDefault(dayKey) ?? new List<Event>();
+            _selectedDayRenderer.Render(
+                _selectedDate, events, _allCalendars, OnSelectedDayEventClicked);
+        }
+
+        private async void OnSelectedDayEventClicked(Event evt)
+        {
+            await _eventDialogService.ShowEditEventDialogAsync(evt);
         }
 
         // ── Event loading ─────────────────────────────────────────────────────
@@ -267,8 +298,18 @@ namespace Chronicle
                 _selectedDate,
                 _eventsByDate,
                 _allCalendars,
-                onDayClicked: async dayDate => await _eventDialogService.ShowCreateEventDialogAsync(dayDate),
+                onDaySelected: SelectDate,
+                onDayActivated: OnDayActivated,
                 onEventClicked: ShowEventPopover);
+        }
+
+        /// <summary>
+        /// Double-tapping a day selects it and opens the create-event dialog.
+        /// </summary>
+        private async void OnDayActivated(DateTime dayDate)
+        {
+            SelectDate(dayDate);
+            await _eventDialogService.ShowCreateEventDialogAsync(dayDate);
         }
 
         // ── Event popover ─────────────────────────────────────────────────────

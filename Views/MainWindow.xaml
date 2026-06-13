@@ -31,6 +31,8 @@
                 <StackPanel Padding="16,20,16,16" Spacing="20">
                     <!-- Mini Month Navigator -->
                     <StackPanel x:Name="MiniMonthPanel" Spacing="2"/>
+                    <!-- Selected Day detail (date, event count, events) -->
+                    <StackPanel x:Name="SelectedDayPanel" Spacing="6"/>
                     <!-- Calendars list / visibility toggles -->
                     <StackPanel x:Name="SidebarPanel" Spacing="4"/>
                 </StackPanel>

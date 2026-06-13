@@ -68,6 +68,8 @@ under `Views/`:
 
 - `Views/Rendering/CalendarGridRenderer` — main month grid and day cells
 - `Views/Rendering/MiniMonthRenderer` — compact sidebar month navigator
+- `Views/Rendering/SelectedDayRenderer` — selected-day detail panel
+  (date, event count, event list, empty state)
 - `Views/Rendering/SidebarRenderer` — calendar list, visibility toggles, and
   the add / edit / delete calendar affordances
 - `Views/Dialogs/EventDialogService` — Create/Edit Event dialogs
@@ -90,9 +92,21 @@ purpose:
 
 This separation is the foundation future Week/Day/Agenda views build on:
 those views need a stable "focused date" independent of which month is
-shown. The mini month is the primary driver — clicking a day updates
-`_selectedDate` and, when the day is outside the current month, advances
-`_displayMonth` to match.
+shown. Selection has several drivers, all funneling into `_selectedDate`:
+
+- Mini month — click a day (advances `_displayMonth` if the day is outside
+  the current month).
+- Main grid — single tap selects a day; double tap selects it and opens the
+  create-event dialog.
+- Today button — selects today and shows its month.
+
+`MainWindow.SelectDate` is the single in-month selection path: it updates
+`_selectedDate` and refreshes only what depends on it (mini-month + grid
+highlights and the selected-day panel) without reloading events. Cross-month
+changes go through `RefreshMonthAsync`, which reloads events and re-renders
+everything, including the selected-day panel. The selected-day panel reads
+its events from the already-loaded `_eventsByDate`, so it never introduces a
+competing query or date model.
 
 These are plain classes instantiated directly by MainWindow — no DI
 container, event bus, or MVVM framework. See "Avoid Premature MVVM" in

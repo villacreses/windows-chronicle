@@ -74,8 +74,9 @@ internal sealed class CalendarGridRenderer
 
     /// <summary>
     /// Renders the month grid for <paramref name="displayMonth"/>.
-    /// <paramref name="onDayClicked"/> fires when an in-month cell's
-    /// background is pressed (opens the create-event dialog).
+    /// <paramref name="onDaySelected"/> fires on a single tap of an in-month
+    /// cell (selects the day). <paramref name="onDayActivated"/> fires on a
+    /// double tap (creates an event for that day).
     /// <paramref name="onEventClicked"/> fires when an event chip is
     /// pressed, passing the event and the chip element to anchor a
     /// popover to (see <see cref="Views.Popovers.EventPopover"/>).
@@ -85,7 +86,8 @@ internal sealed class CalendarGridRenderer
         DateTime selectedDate,
         Dictionary<DateTime, List<Event>> eventsByDate,
         List<Calendar> calendars,
-        Action<DateTime> onDayClicked,
+        Action<DateTime> onDaySelected,
+        Action<DateTime> onDayActivated,
         Action<Event, FrameworkElement> onEventClicked)
     {
         _displayMonth = DateHelpers.GetLocalDayKey(displayMonth);
@@ -116,7 +118,7 @@ internal sealed class CalendarGridRenderer
             var cell = CreateDayCell(
                 cellDate, isInMonth,
                 isSelected: DateHelpers.IsSameDay(cellDate, selectedDate),
-                eventsByDate, calendars, onDayClicked, onEventClicked);
+                eventsByDate, calendars, onDaySelected, onDayActivated, onEventClicked);
             var dayKey = DateHelpers.GetLocalDayKey(cellDate);
             _dayCells[dayKey] = cell;
             Grid.SetRow(cell, cellIndex / 7);
@@ -143,7 +145,8 @@ internal sealed class CalendarGridRenderer
         DateTime cellDate, bool isInMonth, bool isSelected,
         Dictionary<DateTime, List<Event>> eventsByDate,
         List<Calendar> calendars,
-        Action<DateTime> onDayClicked,
+        Action<DateTime> onDaySelected,
+        Action<DateTime> onDayActivated,
         Action<Event, FrameworkElement> onEventClicked)
     {
         var border = new Border
@@ -177,7 +180,9 @@ internal sealed class CalendarGridRenderer
             if (eventsByDate.TryGetValue(dayDate, out var events))
                 stackPanel.Children.Add(CreateEventList(events, calendars, onEventClicked));
 
-            border.PointerPressed += (s, e) => onDayClicked(dayDate);
+            // Single tap selects the day; double tap creates an event.
+            border.Tapped += (s, e) => onDaySelected(dayDate);
+            border.DoubleTapped += (s, e) => onDayActivated(dayDate);
         }
         else
         {
@@ -236,7 +241,7 @@ internal sealed class CalendarGridRenderer
         {
             var capturedEvt = evt;
 
-            var calColor = ResolveCalendarColor(calendars, capturedEvt.CalendarId);
+            var calColor = ColorHelper.ResolveCalendarColor(calendars, capturedEvt.CalendarId);
 
             var eventTextBlock = new TextBlock
             {
@@ -253,11 +258,15 @@ internal sealed class CalendarGridRenderer
                 Background = new SolidColorBrush(new Windows.UI.Color { A = 0, R = 0, G = 0, B = 0 })
             };
 
-            chip.PointerPressed += (s, e) =>
+            // Handle taps on the chip so they don't bubble to the day cell
+            // (which would select the day or create an event). Single tap
+            // opens the popover; double tap is swallowed.
+            chip.Tapped += (s, e) =>
             {
                 e.Handled = true;
                 onEventClicked(capturedEvt, chip);
             };
+            chip.DoubleTapped += (s, e) => e.Handled = true;
 
             eventsPanel.Children.Add(chip);
         }
@@ -276,15 +285,4 @@ internal sealed class CalendarGridRenderer
         return scrollViewer;
     }
 
-    /// <summary>
-    /// Returns the <see cref="Windows.UI.Color"/> for the given calendar.
-    /// Falls back to blue if the calendar is not found.
-    /// </summary>
-    private static Windows.UI.Color ResolveCalendarColor(List<Calendar> calendars, Guid calendarId)
-    {
-        var cal = calendars.FirstOrDefault(c => c.Id == calendarId);
-        return cal is not null
-            ? ColorHelper.ParseHexColor(cal.Color)
-            : ColorHelper.AppAccent;
-    }
 }

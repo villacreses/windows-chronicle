@@ -1,4 +1,6 @@
+using Chronicle.Models;
 using System;
+using System.Collections.Generic;
 
 namespace Chronicle.Helpers;
 
@@ -50,5 +52,22 @@ internal static class ColorHelper
         {
             return AppAccent;
         }
+    }
+
+    /// <summary>
+    /// Resolves a calendar id to its configured color, falling back to the
+    /// app accent when the calendar is absent.
+    /// </summary>
+    public static Windows.UI.Color ResolveCalendarColor(
+        IEnumerable<Calendar> calendars,
+        Guid calendarId)
+    {
+        foreach (var calendar in calendars)
+        {
+            if (calendar.Id == calendarId)
+                return ParseHexColor(calendar.Color);
+        }
+
+        return AppAccent;
     }
 }

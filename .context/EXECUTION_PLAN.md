@@ -17,10 +17,24 @@ Build the complete provider-agnostic calendar experience before beginning accoun
 - Event popover (read-only summary before edit)
 - Mini Month Navigator
 - Calendar Management (create / edit / delete / color)
+- Date Selection experience (selected-day panel + click/double-click model)
 
 ## Current Milestone
 
 Additional Views — Week view (see Next Milestones)
+
+## Recently Completed: Date Selection
+
+Delivered:
+
+- New day-interaction model in the main grid: single tap selects a day,
+  double tap creates an event for it (replacing click-to-create)
+- Selected Day sidebar panel (`SelectedDayRenderer`): selected date, event
+  count, clickable event list, and a "No events scheduled." empty state
+- Clicking an event in the panel opens the existing edit dialog
+- In-month selection updates incrementally via `SelectDate` (no event
+  reload); cross-month selection still goes through `RefreshMonthAsync`
+- Reuses the existing `_selectedDate` model; no competing selection state
 
 ## Recently Completed: Calendar Management
 

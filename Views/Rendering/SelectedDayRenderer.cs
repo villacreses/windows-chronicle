@@ -1,0 +1,135 @@
+using Chronicle.Helpers;
+using Chronicle.Models;
+using Microsoft.UI.Text;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
+using System;
+using System.Collections.Generic;
+
+namespace Chronicle.Views.Rendering;
+
+/// <summary>
+/// Builds the Selected Day section of the sidebar: the selected date, an
+/// event count, and a clickable list of that day's events (or an empty
+/// state). Kept separate from <see cref="SidebarRenderer"/> so calendar-list
+/// and selected-day concerns don't share a class.
+/// </summary>
+internal sealed class SelectedDayRenderer
+{
+    private static readonly Windows.UI.Color MutedText =
+        new() { A = 255, R = 100, G = 100, B = 100 };
+
+    private readonly StackPanel _container;
+
+    public SelectedDayRenderer(StackPanel container)
+    {
+        _container = container;
+    }
+
+    /// <summary>
+    /// Renders the panel for <paramref name="selectedDate"/> and its
+    /// <paramref name="events"/> (already filtered to visible calendars and
+    /// ordered by start time). <paramref name="onEventClicked"/> fires when
+    /// an event row is clicked (opens the edit dialog).
+    /// </summary>
+    public void Render(
+        DateTime selectedDate,
+        List<Event> events,
+        List<Calendar> calendars,
+        Action<Event> onEventClicked)
+    {
+        _container.Children.Clear();
+
+        // Date header
+        _container.Children.Add(new TextBlock
+        {
+            Text = selectedDate.ToString("dddd, MMM d"),
+            FontSize = 14,
+            FontWeight = FontWeights.SemiBold
+        });
+
+        // Event count
+        _container.Children.Add(new TextBlock
+        {
+            Text = $"{events.Count} event{(events.Count == 1 ? "" : "s")}",
+            FontSize = 12,
+            Foreground = new SolidColorBrush(MutedText)
+        });
+
+        if (events.Count == 0)
+        {
+            _container.Children.Add(new TextBlock
+            {
+                Text = "No events scheduled.",
+                FontSize = 13,
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = new SolidColorBrush(MutedText),
+                Margin = new Thickness(0, 2, 0, 0)
+            });
+            return;
+        }
+
+        foreach (var evt in events)
+            _container.Children.Add(BuildEventRow(evt, calendars, onEventClicked));
+    }
+
+    private static Button BuildEventRow(
+        Event evt, List<Calendar> calendars, Action<Event> onEventClicked)
+    {
+        var capturedEvt = evt;
+
+        var colorDot = new Border
+        {
+            Width = 10,
+            Height = 10,
+            CornerRadius = new CornerRadius(5),
+            Background = new SolidColorBrush(
+                ColorHelper.ResolveCalendarColor(calendars, capturedEvt.CalendarId)),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+
+        var timeBlock = new TextBlock
+        {
+            Text = capturedEvt.IsAllDay
+                ? "All day"
+                : capturedEvt.StartTimeUtc.ToLocalTime().ToString("h:mm tt"),
+            FontSize = 12,
+            Width = 64,
+            Foreground = new SolidColorBrush(MutedText),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+
+        var titleBlock = new TextBlock
+        {
+            Text = capturedEvt.Title,
+            FontSize = 13,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+
+        var content = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        content.Children.Add(colorDot);
+        content.Children.Add(timeBlock);
+        content.Children.Add(titleBlock);
+
+        var row = new Button
+        {
+            Content = content,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Left,
+            Padding = new Thickness(4, 6, 4, 6),
+            Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
+            BorderThickness = new Thickness(0)
+        };
+        row.Click += (s, e) => onEventClicked(capturedEvt);
+
+        return row;
+    }
+
+}
