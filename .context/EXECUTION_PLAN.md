@@ -13,6 +13,7 @@ Build the complete provider-agnostic calendar experience before beginning accoun
 - Month navigation
 - Event CRUD
 - Calendar visibility sidebar
+- MainWindow decomposition into rendering/dialog helper classes
 
 ## Current Milestone
 

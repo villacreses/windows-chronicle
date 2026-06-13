@@ -58,6 +58,25 @@ Never:
 Provider
 → UI
 
+## UI Layer Organization
+
+MainWindow is a coordinator: it owns application state, wires up event
+handlers, and triggers refreshes. It does not build UI itself.
+
+Rendering and dialog construction live in dedicated, single-purpose classes
+under `Views/`:
+
+- `Views/Rendering/CalendarGridRenderer` — month grid and day cells
+- `Views/Rendering/SidebarRenderer` — calendar list/visibility sidebar
+- `Views/Dialogs/EventDialogService` — Create/Edit Event dialogs
+
+Shared date/color conversions live in `Helpers/` (`DateHelpers`,
+`ColorHelper`) so rendering classes don't duplicate them.
+
+These are plain classes instantiated directly by MainWindow — no DI
+container, event bus, or MVVM framework. See "Avoid Premature MVVM" in
+DECISIONS.md.
+
 ## Performance Philosophy
 
 Calendar applications are read-heavy.

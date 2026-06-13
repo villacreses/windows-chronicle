@@ -66,3 +66,25 @@ Current complexity does not justify a framework migration.
 Rapid iteration is prioritized.
 
 This decision may be revisited later.
+
+---
+
+## MainWindow Decomposition into Helper Classes
+
+Reason:
+
+MainWindow.xaml.cs had grown into a dumping ground for state, calendar grid
+rendering, sidebar rendering, and dialog construction, making it hard to
+reason about.
+
+Decision:
+
+Extract cohesive rendering/dialog responsibilities into small focused
+classes (`CalendarGridRenderer`, `SidebarRenderer`, `EventDialogService`,
+plus `DateHelpers`/`ColorHelper`), instantiated directly by MainWindow.
+MainWindow remains a coordinator: state ownership, event handlers, and
+refresh orchestration.
+
+No new architectural pattern (MVVM, DI, event bus) was introduced, in
+keeping with "Avoid Premature MVVM." Behavior and repository usage are
+unchanged.
