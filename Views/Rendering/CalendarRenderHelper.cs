@@ -18,6 +18,17 @@ namespace Chronicle.Views.Rendering;
 /// </summary>
 internal static class CalendarRenderHelper
 {
+    /// <summary>
+    /// Fixed pill height. Chips are forced to this height so a renderer can
+    /// compute how many fit in a cell from a simple pitch
+    /// (<see cref="ChipHeight"/> + <see cref="ChipSpacing"/>) without measuring
+    /// each chip.
+    /// </summary>
+    public const double ChipHeight = 21;
+
+    /// <summary>Vertical gap between stacked chips in a day cell.</summary>
+    public const double ChipSpacing = 3;
+
     /// <summary>Secondary label color (day-of-week headers, agenda meta).</summary>
     public static Windows.UI.Color MutedText => Theme.Text3;
 
@@ -54,13 +65,52 @@ internal static class CalendarRenderHelper
             Child = chipText,
             Background = new SolidColorBrush(ColorHelper.Soften(calColor)),
             CornerRadius = new CornerRadius(4),
-            Padding = new Thickness(7, 2, 7, 2)
+            Padding = new Thickness(7, 2, 7, 2),
+            Height = ChipHeight
         };
 
         chip.Tapped += (s, e) =>
         {
             e.Handled = true;
             onEventClicked(capturedEvt, chip);
+        };
+        chip.DoubleTapped += (s, e) => e.Handled = true;
+
+        return chip;
+    }
+
+    /// <summary>
+    /// Creates a chip-styled "+N more" overflow indicator that matches the
+    /// event-pill shape/size with neutral colors. Tapping it runs
+    /// <paramref name="onSelectDay"/> (the existing day-selection behavior);
+    /// gestures are marked handled so the day cell's create-on-double-tap does
+    /// not also fire.
+    /// </summary>
+    public static Border CreateOverflowChip(int hiddenCount, Action onSelectDay)
+    {
+        var text = new TextBlock
+        {
+            Text = $"+{hiddenCount} more",
+            FontSize = 11.5,
+            FontWeight = FontWeights.SemiBold,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            Foreground = new SolidColorBrush(Theme.Text2),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+
+        var chip = new Border
+        {
+            Child = text,
+            Background = new SolidColorBrush(Theme.Hairline2),
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(7, 2, 7, 2),
+            Height = ChipHeight
+        };
+
+        chip.Tapped += (s, e) =>
+        {
+            e.Handled = true;
+            onSelectDay();
         };
         chip.DoubleTapped += (s, e) => e.Handled = true;
 

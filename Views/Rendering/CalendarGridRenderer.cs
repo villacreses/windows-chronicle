@@ -6,6 +6,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using System;
 using System.Collections.Generic;
+using Windows.Foundation;
 
 namespace Chronicle.Views.Rendering;
 
@@ -17,8 +18,9 @@ namespace Chronicle.Views.Rendering;
 /// <list type="bullet">
 ///   <item>Owns the month's <i>layout</i> — seven star-width columns, one row
 ///   per week (from <see cref="DateHelpers.BuildMonthGrid"/>), and each day
-///   cell's circular date badge plus a list of up to four filled event-pill
-///   chips with a "+N more" overflow indicator.</item>
+///   cell's circular date badge plus as many filled event-pill chips as fit the
+///   cell's measured height, with a clickable "+N more" overflow chip when the
+///   day has more events than fit (clicking it selects the day).</item>
 ///   <item>Distinguishes in-month from out-of-month cells, highlights today
 ///   (accent-filled badge) and the selected day (soft tint + accent ring), and
 ///   exposes <see cref="UpdateSelectedDate"/> for incremental selection.</item>
@@ -31,8 +33,6 @@ namespace Chronicle.Views.Rendering;
 /// </summary>
 internal sealed class CalendarGridRenderer
 {
-    private const int EventCap = 4;
-
     private readonly Grid _dayNamesGrid;
     private readonly Grid _calendarGrid;
     private readonly Dictionary<DateTime, Border> _dayCells = new();
@@ -154,12 +154,11 @@ internal sealed class CalendarGridRenderer
         var border = new Border();
         CalendarRenderHelper.ApplyDayContainerVisuals(border, isSelected, isInMonth);
 
-        var stackPanel = new StackPanel
-        {
-            Orientation = Orientation.Vertical,
-            Margin = new Thickness(8),
-            Spacing = 3
-        };
+        // Row 0: date badge (Auto). Row 1: events area (Star) — its measured
+        // height is what drives how many chips fit.
+        var content = new Grid { Margin = new Thickness(8) };
+        content.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        content.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
 
         var numberCircle = CalendarRenderHelper.CreateDayNumber(
             cellDate.Day.ToString(), size: 25, fontSize: 13, out var numberText);
@@ -167,19 +166,37 @@ internal sealed class CalendarGridRenderer
         CalendarRenderHelper.ApplyDayNumberVisuals(numberCircle, numberText, isSelected, isToday, isInMonth);
         _dayNumberCircles[dayKey] = numberCircle;
         _dayNumberBlocks[dayKey] = numberText;
-        stackPanel.Children.Add(numberCircle);
+        Grid.SetRow(numberCircle, 0);
+        content.Children.Add(numberCircle);
 
         if (isInMonth)
         {
-            if (eventsByDate.TryGetValue(dayKey, out var events))
-                stackPanel.Children.Add(CreateEventList(events, calendars, onEventClicked));
+            if (eventsByDate.TryGetValue(dayKey, out var events) && events.Count > 0)
+            {
+                // The events area fills the star row, so its ActualHeight is the
+                // space available for chips. Chips are filled on SizeChanged so
+                // capacity tracks the real (and resizable) cell height.
+                var eventsArea = new Grid { Margin = new Thickness(0, 3, 0, 0) };
+                var eventsHost = new StackPanel
+                {
+                    Orientation = Orientation.Vertical,
+                    Spacing = CalendarRenderHelper.ChipSpacing,
+                    VerticalAlignment = VerticalAlignment.Top
+                };
+                eventsArea.Children.Add(eventsHost);
+                Grid.SetRow(eventsArea, 1);
+                content.Children.Add(eventsArea);
+
+                eventsArea.SizeChanged += (s, e) => FillEventsArea(
+                    eventsArea, eventsHost, events, calendars, cellDate, onEventClicked, onDaySelected);
+            }
 
             // Single tap selects the day; double tap creates an event.
             border.Tapped += (s, e) => onDaySelected(cellDate);
             border.DoubleTapped += (s, e) => onDayActivated(cellDate);
         }
 
-        border.Child = stackPanel;
+        border.Child = content;
         return border;
     }
 
@@ -199,39 +216,57 @@ internal sealed class CalendarGridRenderer
     }
 
     /// <summary>
-    /// Creates the list of event-pill chips for a single day cell, capped at
-    /// <see cref="EventCap"/> with a "+N more" indicator for the remainder.
+    /// Fills a day cell's events area to fit its measured height: renders as
+    /// many event-pill chips as fit, and when the day has more events than fit,
+    /// renders an earlier subset plus a chip-styled "+N more" overflow chip
+    /// (whose tap selects the day). Events are taken in their loaded order
+    /// (earliest first), so the hidden ones are the later events.
     /// </summary>
-    private static UIElement CreateEventList(
-        List<Event> events, List<Calendar> calendars, Action<Event, FrameworkElement> onEventClicked)
+    private static void FillEventsArea(
+        Grid area,
+        StackPanel host,
+        List<Event> events,
+        List<Calendar> calendars,
+        DateTime cellDate,
+        Action<Event, FrameworkElement> onEventClicked,
+        Action<DateTime> onDaySelected)
     {
-        var eventsPanel = new StackPanel
-        {
-            Orientation = Orientation.Vertical,
-            Spacing = 3
-        };
+        var available = area.ActualHeight;
 
-        int shown = Math.Min(events.Count, EventCap);
-        for (int i = 0; i < shown; i++)
+        // Clip the area so a partial chip can never spill into the cell below.
+        area.Clip = new RectangleGeometry { Rect = new Rect(0, 0, area.ActualWidth, available) };
+
+        // Rows that fit, from a uniform chip pitch (height + inter-chip gap).
+        const double pitch = CalendarRenderHelper.ChipHeight + CalendarRenderHelper.ChipSpacing;
+        int rows = (int)Math.Floor((available + CalendarRenderHelper.ChipSpacing) / pitch);
+        if (rows < 0) rows = 0;
+
+        // SizeChanged can fire repeatedly; only rebuild when capacity changes.
+        if (host.Tag is int lastRows && lastRows == rows)
+            return;
+        host.Tag = rows;
+
+        host.Children.Clear();
+        if (rows <= 0)
+            return;
+
+        if (events.Count <= rows)
         {
-            var evt = events[i];
-            eventsPanel.Children.Add(CalendarRenderHelper.CreateEventChip(
-                evt, calendars, FormatChipText(evt), onEventClicked));
+            foreach (var evt in events)
+                host.Children.Add(CalendarRenderHelper.CreateEventChip(
+                    evt, calendars, FormatChipText(evt), onEventClicked));
+            return;
         }
 
-        if (events.Count > EventCap)
-        {
-            eventsPanel.Children.Add(new TextBlock
-            {
-                Text = $"+{events.Count - EventCap} more",
-                FontSize = 11,
-                FontWeight = FontWeights.SemiBold,
-                Margin = new Thickness(4, 1, 0, 0),
-                Foreground = new SolidColorBrush(CalendarRenderHelper.OverflowText)
-            });
-        }
+        // Reserve the last row for the overflow chip.
+        int visible = rows - 1;
+        for (int i = 0; i < visible; i++)
+            host.Children.Add(CalendarRenderHelper.CreateEventChip(
+                events[i], calendars, FormatChipText(events[i]), onEventClicked));
 
-        return eventsPanel;
+        int hidden = events.Count - visible;
+        host.Children.Add(CalendarRenderHelper.CreateOverflowChip(
+            hidden, () => onDaySelected(cellDate)));
     }
 
     private static string FormatChipText(Event evt)
