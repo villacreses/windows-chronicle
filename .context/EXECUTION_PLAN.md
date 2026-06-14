@@ -20,6 +20,18 @@ Build the complete provider-agnostic calendar experience before beginning accoun
 - Date Selection experience (selected-day panel + click/double-click model)
 - Week View (first additional view, built on the selection model)
 
+### UI CONSTRAINT (TEMPORARY)
+
+A dev-only dark theme override is active to reduce visual fatigue.
+
+This does NOT change execution priority:
+1. Day View
+2. Recurrence
+3. Provider integrations
+4. Design overhaul
+
+No UI polish work should be introduced outside of Theme infrastructure stability.
+
 ## Current Milestone
 
 Additional Views — Day view (see Next Milestones)

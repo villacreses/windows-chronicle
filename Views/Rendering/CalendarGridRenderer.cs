@@ -6,7 +6,6 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using System;
 using System.Collections.Generic;
-using System.Linq;
 
 namespace Chronicle.Views.Rendering;
 
@@ -18,22 +17,26 @@ namespace Chronicle.Views.Rendering;
 /// <list type="bullet">
 ///   <item>Owns the month's <i>layout</i> — seven star-width columns, one row
 ///   per week (from <see cref="DateHelpers.BuildMonthGrid"/>), and each day
-///   cell's number plus a scrollable list of up to five event chips with a
-///   "+N more" overflow indicator.</item>
-///   <item>Distinguishes in-month from out-of-month cells, highlights the
-///   selected day, and exposes <see cref="UpdateSelectedDate"/> so selection
-///   can move incrementally without a full re-render.</item>
+///   cell's circular date badge plus a list of up to four filled event-pill
+///   chips with a "+N more" overflow indicator.</item>
+///   <item>Distinguishes in-month from out-of-month cells, highlights today
+///   (accent-filled badge) and the selected day (soft tint + accent ring), and
+///   exposes <see cref="UpdateSelectedDate"/> for incremental selection.</item>
 ///   <item>Reports day selection, day activation, and event clicks back to the
 ///   caller via callbacks; it owns no navigation or event state.</item>
 /// </list>
 ///
-/// Shared day-cell and chip visuals come from <see cref="CalendarRenderHelper"/>.
+/// Shared day-cell and chip visuals come from <see cref="CalendarRenderHelper"/>;
+/// colors come from <see cref="Theme"/>.
 /// </summary>
 internal sealed class CalendarGridRenderer
 {
+    private const int EventCap = 4;
+
     private readonly Grid _dayNamesGrid;
     private readonly Grid _calendarGrid;
     private readonly Dictionary<DateTime, Border> _dayCells = new();
+    private readonly Dictionary<DateTime, Border> _dayNumberCircles = new();
     private readonly Dictionary<DateTime, TextBlock> _dayNumberBlocks = new();
 
     private DateTime _displayMonth;
@@ -49,19 +52,19 @@ internal sealed class CalendarGridRenderer
     {
         _dayNamesGrid.Children.Clear();
 
-        var dayNames = new[] { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
+        var dayNames = new[] { "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT" };
 
         for (int i = 0; i < 7; i++)
         {
             var textBlock = new TextBlock
             {
                 Text = dayNames[i],
-                FontSize = 14,
+                FontSize = 11.5,
                 FontWeight = FontWeights.SemiBold,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-                Foreground = new SolidColorBrush(
-                    new Windows.UI.Color { A = 255, R = 100, G = 100, B = 100 })
+                HorizontalAlignment = HorizontalAlignment.Left,
+                VerticalAlignment = VerticalAlignment.Bottom,
+                Margin = new Thickness(4, 0, 0, 6),
+                Foreground = new SolidColorBrush(Theme.Text3)
             };
 
             Grid.SetColumn(textBlock, i);
@@ -74,9 +77,8 @@ internal sealed class CalendarGridRenderer
     /// <paramref name="onDaySelected"/> fires on a single tap of an in-month
     /// cell (selects the day). <paramref name="onDayActivated"/> fires on a
     /// double tap (creates an event for that day).
-    /// <paramref name="onEventClicked"/> fires when an event chip is
-    /// pressed, passing the event and the chip element to anchor a
-    /// popover to (see <see cref="Views.Popovers.EventPopover"/>).
+    /// <paramref name="onEventClicked"/> fires when an event chip is pressed,
+    /// passing the event and the chip element to anchor a popover to.
     /// </summary>
     public void RenderCalendarGrid(
         DateTime displayMonth,
@@ -90,6 +92,7 @@ internal sealed class CalendarGridRenderer
         _displayMonth = DateHelpers.GetLocalDayKey(displayMonth);
         _selectedDate = DateHelpers.GetLocalDayKey(selectedDate);
         _dayCells.Clear();
+        _dayNumberCircles.Clear();
         _dayNumberBlocks.Clear();
 
         _calendarGrid.Children.Clear();
@@ -108,13 +111,15 @@ internal sealed class CalendarGridRenderer
             _calendarGrid.RowDefinitions.Add(
                 new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
 
+        var today = DateHelpers.GetLocalDayKey(DateTime.Now);
+
         int cellIndex = 0;
         foreach (var cellDate in grid.Days())
         {
             bool isInMonth = DateHelpers.IsInMonth(cellDate, displayMonth);
             var cell = CreateDayCell(
                 cellDate, isInMonth,
-                isSelected: DateHelpers.IsSameDay(cellDate, selectedDate),
+                isToday: DateHelpers.IsSameDay(cellDate, today),
                 eventsByDate, calendars, onDaySelected, onDayActivated, onEventClicked);
             var dayKey = DateHelpers.GetLocalDayKey(cellDate);
             _dayCells[dayKey] = cell;
@@ -131,130 +136,111 @@ internal sealed class CalendarGridRenderer
         selectedDate = DateHelpers.GetLocalDayKey(selectedDate);
         _selectedDate = selectedDate;
 
-        if (_dayCells.TryGetValue(previousDate, out var previousCell))
-            ApplyDayCellVisuals(previousCell, previousDate);
-
-        if (_dayCells.TryGetValue(selectedDate, out var selectedCell))
-            ApplyDayCellVisuals(selectedCell, selectedDate);
+        ApplyDayCellVisuals(previousDate);
+        ApplyDayCellVisuals(selectedDate);
     }
 
     private Border CreateDayCell(
-        DateTime cellDate, bool isInMonth, bool isSelected,
+        DateTime cellDate, bool isInMonth, bool isToday,
         Dictionary<DateTime, List<Event>> eventsByDate,
         List<Calendar> calendars,
         Action<DateTime> onDaySelected,
         Action<DateTime> onDayActivated,
         Action<Event, FrameworkElement> onEventClicked)
     {
-        var border = new Border
-        {
-            BorderThickness = new Thickness(1),
-            Margin = new Thickness(2)
-        };
-        ApplyDayCellVisuals(border, cellDate);
+        var dayKey = DateHelpers.GetLocalDayKey(cellDate);
+        bool isSelected = isInMonth && DateHelpers.IsSameDay(cellDate, _selectedDate);
+
+        var border = new Border();
+        CalendarRenderHelper.ApplyDayContainerVisuals(border, isSelected, isInMonth);
 
         var stackPanel = new StackPanel
         {
             Orientation = Orientation.Vertical,
             Margin = new Thickness(8),
-            Spacing = 4
+            Spacing = 3
         };
+
+        var numberCircle = CalendarRenderHelper.CreateDayNumber(
+            cellDate.Day.ToString(), size: 25, fontSize: 13, out var numberText);
+        numberCircle.HorizontalAlignment = HorizontalAlignment.Left;
+        CalendarRenderHelper.ApplyDayNumberVisuals(numberCircle, numberText, isSelected, isToday, isInMonth);
+        _dayNumberCircles[dayKey] = numberCircle;
+        _dayNumberBlocks[dayKey] = numberText;
+        stackPanel.Children.Add(numberCircle);
 
         if (isInMonth)
         {
-            var dayDate = cellDate;
-
-            var dayNumber = new TextBlock
-            {
-                Text = cellDate.Day.ToString(),
-                FontSize = 16,
-                FontWeight = isSelected ? FontWeights.Bold : FontWeights.SemiBold
-            };
-            ApplyDayNumberVisuals(dayNumber, cellDate);
-            _dayNumberBlocks[DateHelpers.GetLocalDayKey(cellDate)] = dayNumber;
-            stackPanel.Children.Add(dayNumber);
-
-            if (eventsByDate.TryGetValue(dayDate, out var events))
+            if (eventsByDate.TryGetValue(dayKey, out var events))
                 stackPanel.Children.Add(CreateEventList(events, calendars, onEventClicked));
 
             // Single tap selects the day; double tap creates an event.
-            border.Tapped += (s, e) => onDaySelected(dayDate);
-            border.DoubleTapped += (s, e) => onDayActivated(dayDate);
-        }
-        else
-        {
-            CalendarRenderHelper.ApplyDayContainerVisuals(
-                border,
-                isSelected: false,
-                isInScope: false);
+            border.Tapped += (s, e) => onDaySelected(cellDate);
+            border.DoubleTapped += (s, e) => onDayActivated(cellDate);
         }
 
         border.Child = stackPanel;
         return border;
     }
 
-    private void ApplyDayCellVisuals(Border border, DateTime cellDate)
+    private void ApplyDayCellVisuals(DateTime cellDate)
     {
+        var dayKey = DateHelpers.GetLocalDayKey(cellDate);
         bool isInMonth = DateHelpers.IsInMonth(cellDate, _displayMonth);
         bool isSelected = isInMonth && DateHelpers.IsSameDay(cellDate, _selectedDate);
+        bool isToday = DateHelpers.IsSameDay(cellDate, DateHelpers.GetLocalDayKey(DateTime.Now));
 
-        CalendarRenderHelper.ApplyDayContainerVisuals(border, isSelected, isInMonth);
+        if (_dayCells.TryGetValue(dayKey, out var cell))
+            CalendarRenderHelper.ApplyDayContainerVisuals(cell, isSelected, isInMonth);
 
-        if (_dayNumberBlocks.TryGetValue(DateHelpers.GetLocalDayKey(cellDate), out var dayNumber))
-            ApplyDayNumberVisuals(dayNumber, cellDate);
-    }
-
-    private void ApplyDayNumberVisuals(TextBlock dayNumber, DateTime cellDate)
-    {
-        bool isSelected = DateHelpers.IsInMonth(cellDate, _displayMonth)
-            && DateHelpers.IsSameDay(cellDate, _selectedDate);
-
-        CalendarRenderHelper.ApplyDayNumberVisuals(dayNumber, isSelected);
+        if (_dayNumberCircles.TryGetValue(dayKey, out var circle)
+            && _dayNumberBlocks.TryGetValue(dayKey, out var text))
+            CalendarRenderHelper.ApplyDayNumberVisuals(circle, text, isSelected, isToday, isInMonth);
     }
 
     /// <summary>
-    /// Creates a scrollable list of event chips for a single day cell.
-    /// Each chip is clickable and opens the event popover, anchored to the
-    /// chip itself; pointer events are marked Handled to prevent the
-    /// day-cell create-dialog from also firing.
+    /// Creates the list of event-pill chips for a single day cell, capped at
+    /// <see cref="EventCap"/> with a "+N more" indicator for the remainder.
     /// </summary>
     private static UIElement CreateEventList(
         List<Event> events, List<Calendar> calendars, Action<Event, FrameworkElement> onEventClicked)
     {
-        var scrollViewer = new ScrollViewer
-        {
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            MaxHeight = 100
-        };
-
         var eventsPanel = new StackPanel
         {
             Orientation = Orientation.Vertical,
-            Spacing = 2
+            Spacing = 3
         };
 
-        foreach (var evt in events.Take(5))
+        int shown = Math.Min(events.Count, EventCap);
+        for (int i = 0; i < shown; i++)
         {
+            var evt = events[i];
             eventsPanel.Children.Add(CalendarRenderHelper.CreateEventChip(
-                evt,
-                calendars,
-                evt.Title,
-                onEventClicked,
-                new Thickness(0, 0, 0, 2)));
+                evt, calendars, FormatChipText(evt), onEventClicked));
         }
 
-        if (events.Count > 5)
+        if (events.Count > EventCap)
         {
             eventsPanel.Children.Add(new TextBlock
             {
-                Text = $"+{events.Count - 5} more",
-                FontSize = 10,
+                Text = $"+{events.Count - EventCap} more",
+                FontSize = 11,
+                FontWeight = FontWeights.SemiBold,
+                Margin = new Thickness(4, 1, 0, 0),
                 Foreground = new SolidColorBrush(CalendarRenderHelper.OverflowText)
             });
         }
 
-        scrollViewer.Content = eventsPanel;
-        return scrollViewer;
+        return eventsPanel;
     }
 
+    private static string FormatChipText(Event evt)
+    {
+        if (evt.IsAllDay)
+            return evt.Title;
+
+        var start = evt.StartTimeUtc.ToLocalTime();
+        var time = start.Minute == 0 ? start.ToString("h tt") : start.ToString("h:mm tt");
+        return $"{time}  {evt.Title}";
+    }
 }

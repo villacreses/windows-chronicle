@@ -1,5 +1,6 @@
 using Chronicle.Helpers;
 using Chronicle.Models;
+using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
@@ -15,24 +16,24 @@ namespace Chronicle.Views.Rendering;
 /// Responsibilities:
 /// <list type="bullet">
 ///   <item>Owns the week's <i>layout</i> — seven star-width columns, and each
-///   column's header (weekday abbreviation + date number) and scrollable list
-///   of that day's event chips (all events, no cap).</item>
-///   <item>Highlights today (weekday label) and the selected day (column +
-///   number), and exposes <see cref="UpdateSelectedDate"/> so selection can be
-///   moved incrementally without a full re-render.</item>
+///   column's header (weekday abbreviation + circular date badge) and a
+///   scrollable list of that day's filled event-pill chips.</item>
+///   <item>Highlights today (accent-filled badge) and the selected day (soft
+///   tint + accent ring on the column), and exposes
+///   <see cref="UpdateSelectedDate"/> for incremental selection.</item>
 ///   <item>Reports day selection, day activation, and event clicks back to the
 ///   caller via callbacks; it owns no navigation or event state.</item>
 /// </list>
 ///
-/// Week geometry comes from <see cref="DateHelpers.BuildWeek"/> and events come
-/// from the same <c>_eventsByDate</c> store the month grid uses, so this is
-/// purely another consumer of the existing date/event model. Shared day-cell
-/// and chip visuals come from <see cref="CalendarRenderHelper"/>.
+/// Week geometry comes from <see cref="DateHelpers.BuildWeek"/> and events from
+/// the shared <c>_eventsByDate</c> store; shared visuals come from
+/// <see cref="CalendarRenderHelper"/> and colors from <see cref="Theme"/>.
 /// </summary>
 internal sealed class WeekViewRenderer
 {
     private readonly Grid _weekGrid;
     private readonly Dictionary<DateTime, Border> _dayColumns = new();
+    private readonly Dictionary<DateTime, Border> _dayNumberCircles = new();
     private readonly Dictionary<DateTime, TextBlock> _dayNumberBlocks = new();
 
     private DateTime _selectedDate;
@@ -59,6 +60,7 @@ internal sealed class WeekViewRenderer
     {
         _selectedDate = DateHelpers.GetLocalDayKey(selectedDate);
         _dayColumns.Clear();
+        _dayNumberCircles.Clear();
         _dayNumberBlocks.Clear();
 
         _weekGrid.Children.Clear();
@@ -93,11 +95,8 @@ internal sealed class WeekViewRenderer
         selectedDate = DateHelpers.GetLocalDayKey(selectedDate);
         _selectedDate = selectedDate;
 
-        if (_dayColumns.TryGetValue(previousDate, out var previousCell))
-            ApplyColumnVisuals(previousCell, previousDate);
-
-        if (_dayColumns.TryGetValue(selectedDate, out var selectedCell))
-            ApplyColumnVisuals(selectedCell, selectedDate);
+        ApplyColumnVisuals(previousDate);
+        ApplyColumnVisuals(selectedDate);
     }
 
     private Border CreateDayColumn(
@@ -108,12 +107,11 @@ internal sealed class WeekViewRenderer
         Action<DateTime> onDayActivated,
         Action<Event, FrameworkElement> onEventClicked)
     {
-        var border = new Border
-        {
-            BorderThickness = new Thickness(1),
-            Margin = new Thickness(2)
-        };
-        ApplyColumnVisuals(border, dayDate);
+        var dayKey = DateHelpers.GetLocalDayKey(dayDate);
+        bool isSelected = DateHelpers.IsSameDay(dayDate, _selectedDate);
+
+        var border = new Border();
+        CalendarRenderHelper.ApplyDayContainerVisuals(border, isSelected);
 
         var stackPanel = new StackPanel
         {
@@ -122,31 +120,33 @@ internal sealed class WeekViewRenderer
             Spacing = 6
         };
 
-        // Header: weekday abbreviation + date number.
-        var header = new StackPanel { Orientation = Orientation.Vertical, Spacing = 0 };
-        header.Children.Add(new TextBlock
+        // Header: weekday abbreviation + circular date badge.
+        var header = new StackPanel
         {
-            Text = dayDate.ToString("ddd"),
-            FontSize = 12,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            Foreground = new SolidColorBrush(
-                isToday ? ColorHelper.AppAccent : CalendarRenderHelper.MutedText)
-        });
-
-        var dayNumber = new TextBlock
-        {
-            Text = dayDate.Day.ToString(),
-            FontSize = 18,
+            Orientation = Orientation.Vertical,
+            Spacing = 2,
             HorizontalAlignment = HorizontalAlignment.Center
         };
-        _dayNumberBlocks[DateHelpers.GetLocalDayKey(dayDate)] = dayNumber;
-        CalendarRenderHelper.ApplyDayNumberVisuals(
-            dayNumber, DateHelpers.IsSameDay(dayDate, _selectedDate));
-        header.Children.Add(dayNumber);
+        header.Children.Add(new TextBlock
+        {
+            Text = dayDate.ToString("ddd").ToUpperInvariant(),
+            FontSize = 11,
+            FontWeight = FontWeights.SemiBold,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            Foreground = new SolidColorBrush(isToday ? Theme.AccentText : Theme.Text3)
+        });
+
+        var numberCircle = CalendarRenderHelper.CreateDayNumber(
+            dayDate.Day.ToString(), size: 32, fontSize: 18, out var numberText);
+        numberCircle.HorizontalAlignment = HorizontalAlignment.Center;
+        CalendarRenderHelper.ApplyDayNumberVisuals(numberCircle, numberText, isSelected, isToday);
+        _dayNumberCircles[dayKey] = numberCircle;
+        _dayNumberBlocks[dayKey] = numberText;
+        header.Children.Add(numberCircle);
 
         stackPanel.Children.Add(header);
 
-        if (eventsByDate.TryGetValue(dayDate, out var events))
+        if (eventsByDate.TryGetValue(dayKey, out var events))
             stackPanel.Children.Add(CreateEventList(events, calendars, onEventClicked));
 
         // Single tap selects the day; double tap creates an event for it.
@@ -157,20 +157,23 @@ internal sealed class WeekViewRenderer
         return border;
     }
 
-    private void ApplyColumnVisuals(Border border, DateTime dayDate)
+    private void ApplyColumnVisuals(DateTime dayDate)
     {
+        var dayKey = DateHelpers.GetLocalDayKey(dayDate);
         bool isSelected = DateHelpers.IsSameDay(dayDate, _selectedDate);
+        bool isToday = DateHelpers.IsSameDay(dayDate, DateHelpers.GetLocalDayKey(DateTime.Now));
 
-        // Every day in the week is in scope, so isInScope stays true.
-        CalendarRenderHelper.ApplyDayContainerVisuals(border, isSelected);
+        if (_dayColumns.TryGetValue(dayKey, out var column))
+            CalendarRenderHelper.ApplyDayContainerVisuals(column, isSelected);
 
-        if (_dayNumberBlocks.TryGetValue(DateHelpers.GetLocalDayKey(dayDate), out var dayNumber))
-            CalendarRenderHelper.ApplyDayNumberVisuals(dayNumber, isSelected);
+        if (_dayNumberCircles.TryGetValue(dayKey, out var circle)
+            && _dayNumberBlocks.TryGetValue(dayKey, out var text))
+            CalendarRenderHelper.ApplyDayNumberVisuals(circle, text, isSelected, isToday);
     }
 
     /// <summary>
-    /// Builds a scrollable list of event chips for one day column. Each chip
-    /// shows the start time (or "All day") and title; chip visuals and tap
+    /// Builds a scrollable list of event-pill chips for one day column. Each
+    /// chip shows the start time (or "All day") and title; chip visuals and tap
     /// handling come from <see cref="CalendarRenderHelper.CreateEventChip"/>.
     /// </summary>
     private static UIElement CreateEventList(
@@ -187,10 +190,7 @@ internal sealed class WeekViewRenderer
                 : evt.StartTimeUtc.ToLocalTime().ToString("h:mm tt");
 
             eventsPanel.Children.Add(CalendarRenderHelper.CreateEventChip(
-                evt,
-                calendars,
-                $"{timeText}  {evt.Title}",
-                onEventClicked));
+                evt, calendars, $"{timeText}  {evt.Title}", onEventClicked));
         }
 
         scrollViewer.Content = eventsPanel;

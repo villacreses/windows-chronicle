@@ -13,19 +13,18 @@
          pointer-blur light-dismiss behavior. -->
     <StackPanel Width="280" Spacing="10">
 
-        <!-- Title row: calendar color dot + event title -->
-        <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Top">
-            <Border x:Name="ColorDot"
-                    Width="12" Height="12"
-                    CornerRadius="6"
-                    Margin="0,4,0,0"
-                    VerticalAlignment="Top"/>
-            <TextBlock x:Name="TitleText"
-                       FontSize="16"
-                       FontWeight="SemiBold"
-                       TextWrapping="Wrap"
-                       VerticalAlignment="Center"/>
-        </StackPanel>
+        <!-- Accent bar tinted to the event's calendar color -->
+        <Border x:Name="AccentBar"
+                Width="38" Height="4"
+                CornerRadius="2"
+                HorizontalAlignment="Left"
+                Margin="0,0,0,2"/>
+
+        <!-- Event title -->
+        <TextBlock x:Name="TitleText"
+                   FontSize="16"
+                   FontWeight="SemiBold"
+                   TextWrapping="Wrap"/>
 
         <!-- Time range -->
         <TextBlock x:Name="TimeRangeText"

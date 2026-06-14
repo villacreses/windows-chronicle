@@ -14,27 +14,27 @@
     </Window.SystemBackdrop>
 
     <!-- Root: Sidebar (fixed) | Main content (fills remaining space) -->
-    <Grid x:Name="RootGrid" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+    <Grid x:Name="RootGrid">
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="220"/>
+            <ColumnDefinition Width="260"/>
             <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
 
         <!-- ═══════════════════════════════════════════════════════
-             Left Sidebar
+             Left Sidebar  (elevated dark surface)
              ═══════════════════════════════════════════════════════ -->
         <Border Grid.Column="0"
-                BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
-                BorderThickness="0,0,1,0"
-                Background="{ThemeResource LayerFillColorDefaultBrush}">
+                Background="#232427"
+                BorderBrush="#17FFFFFF"
+                BorderThickness="0,0,1,0">
             <ScrollViewer VerticalScrollBarVisibility="Auto">
-                <StackPanel Padding="16,20,16,16" Spacing="20">
+                <StackPanel Padding="14,16,14,18" Spacing="22">
                     <!-- Mini Month Navigator -->
                     <StackPanel x:Name="MiniMonthPanel" Spacing="2"/>
                     <!-- Selected Day detail (date, event count, events) -->
                     <StackPanel x:Name="SelectedDayPanel" Spacing="6"/>
                     <!-- Calendars list / visibility toggles -->
-                    <StackPanel x:Name="SidebarPanel" Spacing="4"/>
+                    <StackPanel x:Name="SidebarPanel" Spacing="2"/>
                 </StackPanel>
             </ScrollViewer>
         </Border>
@@ -42,43 +42,56 @@
         <!-- ═══════════════════════════════════════════════════════
              Main Calendar Area
              ═══════════════════════════════════════════════════════ -->
-        <Grid Grid.Column="1" Padding="20">
+        <Grid Grid.Column="1" Padding="18,14,18,16">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
 
             <!-- Navigation Header -->
-            <Grid Grid.Row="0" Height="50" Margin="0,0,0,20">
+            <Grid Grid.Row="0" Height="48" Margin="0,0,0,12">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
 
-                <!-- Navigation Buttons (Left). Previous/Next move by month in
-                     Month view and by week in Week view. -->
-                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
-                    <Button x:Name="PrevMonthButton" Content="Previous" Padding="12,6"/>
-                    <Button x:Name="TodayButton" Content="Today" Padding="12,6"/>
-                    <Button x:Name="NextMonthButton" Content="Next" Padding="12,6"/>
+                <!-- Left group: Today, prev/next chevrons, period title.
+                     Previous/Next move by month in Month view, by week in Week view. -->
+                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                    <Button x:Name="TodayButton" Content="Today" Padding="16,6"/>
+                    <StackPanel Orientation="Horizontal" Spacing="2">
+                        <Button x:Name="PrevMonthButton" Width="34" Height="34" Padding="0"
+                                Background="Transparent" BorderThickness="0"
+                                ToolTipService.ToolTip="Previous">
+                            <FontIcon Glyph="&#xE76B;" FontFamily="Segoe MDL2 Assets" FontSize="13"/>
+                        </Button>
+                        <Button x:Name="NextMonthButton" Width="34" Height="34" Padding="0"
+                                Background="Transparent" BorderThickness="0"
+                                ToolTipService.ToolTip="Next">
+                            <FontIcon Glyph="&#xE76C;" FontFamily="Segoe MDL2 Assets" FontSize="13"/>
+                        </Button>
+                    </StackPanel>
+                    <TextBlock
+                        x:Name="MonthYearText"
+                        Text="June 2026"
+                        FontSize="22"
+                        FontWeight="SemiBold"
+                        VerticalAlignment="Center"
+                        Margin="4,0,0,0"/>
                 </StackPanel>
 
-                <!-- Period Text (Center): month name or week range -->
-                <TextBlock
-                    x:Name="MonthYearText"
-                    Grid.Column="1"
-                    Text="June 2026"
-                    FontSize="28"
-                    FontWeight="Bold"
-                    HorizontalAlignment="Center"
-                    VerticalAlignment="Center"/>
-
-                <!-- View Switcher (Right): Month / Week -->
-                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="0" VerticalAlignment="Center">
-                    <ToggleButton x:Name="MonthViewToggle" Content="Month" Padding="12,6" IsChecked="True"/>
-                    <ToggleButton x:Name="WeekViewToggle" Content="Week" Padding="12,6"/>
-                </StackPanel>
+                <!-- View Switcher (Right): segmented Month / Week -->
+                <Border Grid.Column="2" VerticalAlignment="Center"
+                        Background="#2A2B2F" CornerRadius="7" Padding="3"
+                        BorderBrush="#17FFFFFF" BorderThickness="1">
+                    <StackPanel Orientation="Horizontal" Spacing="2">
+                        <ToggleButton x:Name="MonthViewToggle" Content="Month" Padding="16,4"
+                                      BorderThickness="0" IsChecked="True"/>
+                        <ToggleButton x:Name="WeekViewToggle" Content="Week" Padding="16,4"
+                                      BorderThickness="0"/>
+                    </StackPanel>
+                </Border>
             </Grid>
 
             <!-- Month View -->
@@ -89,7 +102,7 @@
                 </Grid.RowDefinitions>
 
                 <!-- Day Name Headers (Sun–Sat) -->
-                <Grid x:Name="DayNamesGrid" Grid.Row="0" Height="40">
+                <Grid x:Name="DayNamesGrid" Grid.Row="0" Height="30">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="*"/>

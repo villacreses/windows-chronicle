@@ -82,13 +82,46 @@ under `Views/`:
 - `Views/Popovers/EventPopover` — read-only event summary popover
 
 Shared date/color conversions live in `Helpers/` (`DateHelpers`,
-`ColorHelper`) so rendering classes don't duplicate them. Month-grid
+`ColorHelper`) so rendering classes don't duplicate them.
+
+## Visual Design
+
+Chronicle uses a dark "Fluent" visual language (teal-green accent), ported
+from the Claude Design handoff. It is applied in two coordinated layers:
+
+- **Standard WinUI controls** (dialogs, buttons, the event popover, toggles)
+  pick it up from `App.xaml`: `RequestedTheme="Dark"` plus `SystemAccentColor`
+  overrides set to the teal ramp. The window keeps the Mica backdrop.
+- **Code-built renderers** read explicit tokens from `Helpers/Theme.cs` — the
+  single source of truth for surface, hairline, text-ramp, and accent colors.
+  `ColorHelper` exposes the accent and per-calendar color helpers
+  (`Soften`/`LightenForText` derive the filled event-pill background and text
+  from a calendar's stored hex). `CalendarRenderHelper` applies the shared
+  day-cell, day-number badge, and event-pill visuals so Month and Week stay
+  consistent.
+
+Renderer color constants were removed in favor of `Theme`; to retune the
+palette, edit `Theme.cs` (renderers) and the `App.xaml` accent colors
+(standard controls). Month-grid
 geometry (week count + Sunday-aligned cell dates) is produced once by
 `DateHelpers.BuildMonthGrid` and consumed by both the main grid and the
 mini month, so the two never drift apart. Shared *visual* construction
 (event chips, selectable day-cell styling) lives in
 `Views/Rendering/CalendarRenderHelper`, so the month and week renderers share
 appearance and interaction without copy-pasting cell/chip code.
+
+### Theme System
+
+The current Theme layer is a minimal, development-only abstraction used to centralize renderer colors.
+
+Constraints:
+- Hard-coded dark mode is used during development.
+- No full theming system (light/dark switching, user preferences) exists.
+- Theme is NOT part of product architecture at this stage.
+- It exists only to stabilize visual consistency during feature development.
+
+Future work:
+- Replace with proper system-aware theme support during design overhaul phase.
 
 ## Navigation State
 

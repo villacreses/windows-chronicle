@@ -20,11 +20,8 @@ internal sealed class SidebarRenderer
     private const string AddGlyph = "";  // Add
     private const string MoreGlyph = ""; // More (horizontal ellipsis)
 
-    private static readonly Windows.UI.Color HeaderText =
-        new() { A = 255, R = 100, G = 100, B = 100 };
-
-    private static readonly Windows.UI.Color PlaceholderText =
-        new() { A = 180, R = 120, G = 120, B = 120 };
+    private static readonly Windows.UI.Color HeaderText = Theme.Text3;
+    private static readonly Windows.UI.Color PlaceholderText = Theme.Text3;
 
     private readonly StackPanel _sidebarPanel;
 
@@ -78,9 +75,10 @@ internal sealed class SidebarRenderer
 
         var label = new TextBlock
         {
-            Text = "Calendars",
-            FontSize = 13,
-            FontWeight = FontWeights.SemiBold,
+            Text = "CALENDARS",
+            FontSize = 11,
+            FontWeight = FontWeights.Bold,
+            CharacterSpacing = 60,
             Foreground = new SolidColorBrush(HeaderText),
             VerticalAlignment = VerticalAlignment.Center
         };

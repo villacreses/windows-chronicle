@@ -24,14 +24,9 @@ internal sealed class MiniMonthRenderer
     private const string ChevronLeftGlyph = "";
     private const string ChevronRightGlyph = "";
 
-    private static readonly Windows.UI.Color InMonthText =
-        new() { A = 255, R = 32, G = 32, B = 32 };
-
-    private static readonly Windows.UI.Color OutOfMonthText =
-        new() { A = 255, R = 180, G = 180, B = 180 };
-
-    private static readonly Windows.UI.Color SelectedText =
-        new() { A = 255, R = 255, G = 255, B = 255 };
+    private static readonly Windows.UI.Color InMonthText = Theme.Text2;
+    private static readonly Windows.UI.Color OutOfMonthText = Theme.Text4;
+    private static readonly Windows.UI.Color SelectedText = Theme.OnAccent;
 
     private readonly StackPanel _container;
     private readonly Dictionary<DateTime, Button> _dayButtons = new();
@@ -149,7 +144,7 @@ internal sealed class MiniMonthRenderer
                 Text = letters[i],
                 FontSize = 11,
                 HorizontalAlignment = HorizontalAlignment.Center,
-                Foreground = new SolidColorBrush(OutOfMonthText)
+                Foreground = new SolidColorBrush(Theme.Text3)
             };
             Grid.SetColumn(letter, i);
             row.Children.Add(letter);

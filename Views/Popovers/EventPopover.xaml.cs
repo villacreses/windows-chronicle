@@ -46,10 +46,10 @@ public sealed partial class EventPopover : UserControl
 
         TitleText.Text = evt.Title;
 
-        var dotColor = calendar is not null
+        var accentColor = calendar is not null
             ? ColorHelper.ParseHexColor(calendar.Color)
             : ColorHelper.AppAccent;
-        ColorDot.Background = new SolidColorBrush(dotColor);
+        AccentBar.Background = new SolidColorBrush(accentColor);
 
         TimeRangeText.Text = evt.IsAllDay
             ? "All day"

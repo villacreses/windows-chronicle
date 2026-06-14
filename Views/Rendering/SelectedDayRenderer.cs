@@ -86,14 +86,15 @@ internal sealed class SelectedDayRenderer
     {
         var capturedEvt = evt;
 
-        var colorDot = new Border
+        // Agenda-style left color bar (matches the design).
+        var colorBar = new Border
         {
-            Width = 10,
-            Height = 10,
-            CornerRadius = new CornerRadius(5),
+            Width = 3,
+            CornerRadius = new CornerRadius(2),
             Background = new SolidColorBrush(
                 ColorHelper.ResolveCalendarColor(calendars, capturedEvt.CalendarId)),
-            VerticalAlignment = VerticalAlignment.Center
+            VerticalAlignment = VerticalAlignment.Stretch,
+            MinHeight = 30
         };
 
         var timeBlock = new TextBlock
@@ -101,29 +102,34 @@ internal sealed class SelectedDayRenderer
             Text = capturedEvt.IsAllDay
                 ? "All day"
                 : capturedEvt.StartTimeUtc.ToLocalTime().ToString("h:mm tt"),
-            FontSize = 12,
-            Width = 64,
-            Foreground = new SolidColorBrush(CalendarRenderHelper.MutedText),
-            VerticalAlignment = VerticalAlignment.Center
+            FontSize = 11,
+            Foreground = new SolidColorBrush(CalendarRenderHelper.MutedText)
         };
 
         var titleBlock = new TextBlock
         {
             Text = capturedEvt.Title,
             FontSize = 13,
-            TextTrimming = TextTrimming.CharacterEllipsis,
+            FontWeight = FontWeights.Medium,
+            TextTrimming = TextTrimming.CharacterEllipsis
+        };
+
+        var textColumn = new StackPanel
+        {
+            Orientation = Orientation.Vertical,
+            Spacing = 1,
             VerticalAlignment = VerticalAlignment.Center
         };
+        textColumn.Children.Add(timeBlock);
+        textColumn.Children.Add(titleBlock);
 
         var content = new StackPanel
         {
             Orientation = Orientation.Horizontal,
-            Spacing = 8,
-            VerticalAlignment = VerticalAlignment.Center
+            Spacing = 9
         };
-        content.Children.Add(colorDot);
-        content.Children.Add(timeBlock);
-        content.Children.Add(titleBlock);
+        content.Children.Add(colorBar);
+        content.Children.Add(textColumn);
 
         var row = new Button
         {

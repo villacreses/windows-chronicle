@@ -9,27 +9,47 @@ namespace Chronicle.Helpers;
 /// </summary>
 internal static class ColorHelper
 {
-    public const string AppAccentHex = "#3B82F6";
+    public const string AppAccentHex = "#2E9B7C";
 
-    public static Windows.UI.Color AppAccent { get; } =
-        new() { A = 255, R = 59, G = 130, B = 246 };
+    public static Windows.UI.Color AppAccent => Theme.Accent;
 
     /// <summary>
-    /// Preset palette offered when creating/editing a calendar. Calendars
-    /// still store an arbitrary "#RRGGBB" string; this is just the curated
-    /// set surfaced in the UI so we don't need a full color-picker control.
+    /// Preset palette offered when creating/editing a calendar, tuned for the
+    /// dark theme. Calendars still store an arbitrary "#RRGGBB" string; this is
+    /// just the curated set surfaced in the UI so we don't need a full
+    /// color-picker control.
     /// </summary>
     public static readonly string[] Palette =
     {
-        "#3B82F6", // blue
-        "#EF4444", // red
-        "#10B981", // green
-        "#F59E0B", // amber
+        "#5B92F5", // blue
+        "#E0A458", // amber
+        "#2E9B7C", // teal
+        "#F0686B", // red
         "#8B5CF6", // violet
         "#EC4899", // pink
-        "#14B8A6", // teal
-        "#6B7280", // gray
+        "#10B981", // green
+        "#9AA0AA", // gray
     };
+
+    /// <summary>
+    /// Returns a translucent "soft" fill of <paramref name="color"/> for event
+    /// chip backgrounds over dark surfaces (the design's <c>--cal-soft</c>).
+    /// </summary>
+    public static Windows.UI.Color Soften(Windows.UI.Color color, double alpha = 0.18)
+        => new() { A = (byte)(alpha * 255), R = color.R, G = color.G, B = color.B };
+
+    /// <summary>
+    /// Blends <paramref name="color"/> toward white so calendar-colored text
+    /// stays legible on dark fills (the design's <c>--cal-text</c>).
+    /// </summary>
+    public static Windows.UI.Color LightenForText(Windows.UI.Color color, double amount = 0.5)
+        => new()
+        {
+            A = 255,
+            R = (byte)(color.R + (255 - color.R) * amount),
+            G = (byte)(color.G + (255 - color.G) * amount),
+            B = (byte)(color.B + (255 - color.B) * amount)
+        };
 
     /// <summary>
     /// Parses a "#RRGGBB" hex color string into a <see cref="Windows.UI.Color"/>.
