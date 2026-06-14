@@ -11,29 +11,26 @@ using System.Linq;
 namespace Chronicle.Views.Rendering;
 
 /// <summary>
-/// Builds the day-of-week header row and the month grid of day cells,
-/// including the event chips rendered inside each cell.
+/// Renders the Month View: the Sun–Sat day-of-week header row and the month
+/// grid of day cells.
+///
+/// Responsibilities:
+/// <list type="bullet">
+///   <item>Owns the month's <i>layout</i> — seven star-width columns, one row
+///   per week (from <see cref="DateHelpers.BuildMonthGrid"/>), and each day
+///   cell's number plus a scrollable list of up to five event chips with a
+///   "+N more" overflow indicator.</item>
+///   <item>Distinguishes in-month from out-of-month cells, highlights the
+///   selected day, and exposes <see cref="UpdateSelectedDate"/> so selection
+///   can move incrementally without a full re-render.</item>
+///   <item>Reports day selection, day activation, and event clicks back to the
+///   caller via callbacks; it owns no navigation or event state.</item>
+/// </list>
+///
+/// Shared day-cell and chip visuals come from <see cref="CalendarRenderHelper"/>.
 /// </summary>
 internal sealed class CalendarGridRenderer
 {
-    private static readonly Windows.UI.Color InMonthBackground =
-        new() { A = 255, R = 255, G = 255, B = 255 };
-
-    private static readonly Windows.UI.Color OutOfMonthBackground =
-        new() { A = 255, R = 245, G = 245, B = 245 };
-
-    private static readonly Windows.UI.Color CellBorder =
-        new() { A = 200, R = 220, G = 220, B = 220 };
-
-    private static readonly Windows.UI.Color SelectedBackground =
-        new() { A = 255, R = 239, G = 246, B = 255 };
-
-    private static readonly Windows.UI.Color DayNumberText =
-        new() { A = 255, R = 0, G = 0, B = 0 };
-
-    private static readonly Windows.UI.Color MutedText =
-        new() { A = 200, R = 128, G = 128, B = 128 };
-
     private readonly Grid _dayNamesGrid;
     private readonly Grid _calendarGrid;
     private readonly Dictionary<DateTime, Border> _dayCells = new();
@@ -186,7 +183,10 @@ internal sealed class CalendarGridRenderer
         }
         else
         {
-            border.Background = new SolidColorBrush(OutOfMonthBackground);
+            CalendarRenderHelper.ApplyDayContainerVisuals(
+                border,
+                isSelected: false,
+                isInScope: false);
         }
 
         border.Child = stackPanel;
@@ -198,10 +198,7 @@ internal sealed class CalendarGridRenderer
         bool isInMonth = DateHelpers.IsInMonth(cellDate, _displayMonth);
         bool isSelected = isInMonth && DateHelpers.IsSameDay(cellDate, _selectedDate);
 
-        border.Background = new SolidColorBrush(
-            isSelected ? SelectedBackground : isInMonth ? InMonthBackground : OutOfMonthBackground);
-        border.BorderBrush = new SolidColorBrush(isSelected ? ColorHelper.AppAccent : CellBorder);
-        border.BorderThickness = new Thickness(isSelected ? 2 : 1);
+        CalendarRenderHelper.ApplyDayContainerVisuals(border, isSelected, isInMonth);
 
         if (_dayNumberBlocks.TryGetValue(DateHelpers.GetLocalDayKey(cellDate), out var dayNumber))
             ApplyDayNumberVisuals(dayNumber, cellDate);
@@ -212,8 +209,7 @@ internal sealed class CalendarGridRenderer
         bool isSelected = DateHelpers.IsInMonth(cellDate, _displayMonth)
             && DateHelpers.IsSameDay(cellDate, _selectedDate);
 
-        dayNumber.Foreground = new SolidColorBrush(isSelected ? ColorHelper.AppAccent : DayNumberText);
-        dayNumber.FontWeight = isSelected ? FontWeights.Bold : FontWeights.SemiBold;
+        CalendarRenderHelper.ApplyDayNumberVisuals(dayNumber, isSelected);
     }
 
     /// <summary>
@@ -239,36 +235,12 @@ internal sealed class CalendarGridRenderer
 
         foreach (var evt in events.Take(5))
         {
-            var capturedEvt = evt;
-
-            var calColor = ColorHelper.ResolveCalendarColor(calendars, capturedEvt.CalendarId);
-
-            var eventTextBlock = new TextBlock
-            {
-                Text = capturedEvt.Title,
-                FontSize = 11,
-                TextWrapping = TextWrapping.Wrap,
-                Foreground = new SolidColorBrush(calColor),
-                Margin = new Thickness(0, 0, 0, 2)
-            };
-
-            var chip = new Border
-            {
-                Child = eventTextBlock,
-                Background = new SolidColorBrush(new Windows.UI.Color { A = 0, R = 0, G = 0, B = 0 })
-            };
-
-            // Handle taps on the chip so they don't bubble to the day cell
-            // (which would select the day or create an event). Single tap
-            // opens the popover; double tap is swallowed.
-            chip.Tapped += (s, e) =>
-            {
-                e.Handled = true;
-                onEventClicked(capturedEvt, chip);
-            };
-            chip.DoubleTapped += (s, e) => e.Handled = true;
-
-            eventsPanel.Children.Add(chip);
+            eventsPanel.Children.Add(CalendarRenderHelper.CreateEventChip(
+                evt,
+                calendars,
+                evt.Title,
+                onEventClicked,
+                new Thickness(0, 0, 0, 2)));
         }
 
         if (events.Count > 5)
@@ -277,7 +249,7 @@ internal sealed class CalendarGridRenderer
             {
                 Text = $"+{events.Count - 5} more",
                 FontSize = 10,
-                Foreground = new SolidColorBrush(MutedText)
+                Foreground = new SolidColorBrush(CalendarRenderHelper.OverflowText)
             });
         }
 

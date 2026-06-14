@@ -45,12 +45,10 @@
         <Grid Grid.Column="1" Padding="20">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
 
-            <!-- Month Navigation Header -->
+            <!-- Navigation Header -->
             <Grid Grid.Row="0" Height="50" Margin="0,0,0,20">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
@@ -58,14 +56,15 @@
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
 
-                <!-- Navigation Buttons (Left) -->
+                <!-- Navigation Buttons (Left). Previous/Next move by month in
+                     Month view and by week in Week view. -->
                 <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
                     <Button x:Name="PrevMonthButton" Content="Previous" Padding="12,6"/>
                     <Button x:Name="TodayButton" Content="Today" Padding="12,6"/>
                     <Button x:Name="NextMonthButton" Content="Next" Padding="12,6"/>
                 </StackPanel>
 
-                <!-- Month/Year Text (Center) -->
+                <!-- Period Text (Center): month name or week range -->
                 <TextBlock
                     x:Name="MonthYearText"
                     Grid.Column="1"
@@ -74,23 +73,40 @@
                     FontWeight="Bold"
                     HorizontalAlignment="Center"
                     VerticalAlignment="Center"/>
+
+                <!-- View Switcher (Right): Month / Week -->
+                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="0" VerticalAlignment="Center">
+                    <ToggleButton x:Name="MonthViewToggle" Content="Month" Padding="12,6" IsChecked="True"/>
+                    <ToggleButton x:Name="WeekViewToggle" Content="Week" Padding="12,6"/>
+                </StackPanel>
             </Grid>
 
-            <!-- Day Name Headers (Sun–Sat) -->
-            <Grid x:Name="DayNamesGrid" Grid.Row="2" Height="40">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="*"/>
-                </Grid.ColumnDefinitions>
+            <!-- Month View -->
+            <Grid x:Name="MonthViewRoot" Grid.Row="1">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <!-- Day Name Headers (Sun–Sat) -->
+                <Grid x:Name="DayNamesGrid" Grid.Row="0" Height="40">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                </Grid>
+
+                <!-- Calendar Grid (7 columns, variable rows) -->
+                <Grid x:Name="CalendarGrid" Grid.Row="1"/>
             </Grid>
 
-            <!-- Calendar Grid (7 columns, variable rows) -->
-            <Grid x:Name="CalendarGrid" Grid.Row="3"/>
+            <!-- Week View (7 day columns; populated by WeekViewRenderer) -->
+            <Grid x:Name="WeekViewRoot" Grid.Row="1" Visibility="Collapsed"/>
         </Grid>
     </Grid>
 </Window>

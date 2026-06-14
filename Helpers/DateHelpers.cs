@@ -94,4 +94,45 @@ internal static class DateHelpers
     /// <summary>True if both values fall on the same calendar day (ignores time and kind).</summary>
     public static bool IsSameDay(DateTime a, DateTime b)
         => a.Date == b.Date;
+
+    // ── Week geometry (Sunday-aligned, matching the month grid) ───────────
+
+    /// <summary>
+    /// Gets the Sunday that begins the week containing <paramref name="date"/>,
+    /// as a local day key. Uses the same Sunday-first convention as
+    /// <see cref="BuildMonthGrid"/>.
+    /// </summary>
+    public static DateTime GetWeekStart(DateTime date)
+    {
+        var key = GetLocalDayKey(date);
+        return key.AddDays(-(int)key.DayOfWeek);
+    }
+
+    /// <summary>
+    /// Returns the seven local day keys (Sunday→Saturday) of the week
+    /// containing <paramref name="date"/>.
+    /// </summary>
+    public static IReadOnlyList<DateTime> BuildWeek(DateTime date)
+    {
+        var start = GetWeekStart(date);
+        var days = new DateTime[7];
+        for (int i = 0; i < 7; i++)
+            days[i] = start.AddDays(i);
+        return days;
+    }
+
+    /// <summary>
+    /// Gets the start (UTC) and end (UTC, inclusive) boundaries of the week
+    /// containing <paramref name="date"/>. Mirrors <see cref="GetMonthRangeUtc"/>.
+    /// </summary>
+    public static (DateTime startUtc, DateTime endUtc) GetWeekRangeUtc(DateTime date)
+    {
+        var weekStartLocal = GetWeekStart(date);
+        var weekEndUtc = weekStartLocal.AddDays(7).ToUniversalTime().AddTicks(-1);
+        return (weekStartLocal.ToUniversalTime(), weekEndUtc);
+    }
+
+    /// <summary>True if both dates fall in the same Sunday-aligned week.</summary>
+    public static bool IsSameWeek(DateTime a, DateTime b)
+        => GetWeekStart(a) == GetWeekStart(b);
 }

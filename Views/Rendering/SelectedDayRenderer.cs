@@ -10,16 +10,23 @@ using System.Collections.Generic;
 namespace Chronicle.Views.Rendering;
 
 /// <summary>
-/// Builds the Selected Day section of the sidebar: the selected date, an
-/// event count, and a clickable list of that day's events (or an empty
-/// state). Kept separate from <see cref="SidebarRenderer"/> so calendar-list
-/// and selected-day concerns don't share a class.
+/// Renders the Selected Day section of the sidebar.
+///
+/// Responsibilities:
+/// <list type="bullet">
+///   <item>Shows the selected date, an event count, and a clickable list of
+///   that day's events, or a "No events scheduled." empty state.</item>
+///   <item>Builds event rows as full-width <see cref="Button"/>s whose click
+///   opens the edit dialog directly — a deliberately different interaction
+///   from the grid/week event chips, which open the read-only popover.</item>
+///   <item>Reads the pre-filtered, pre-sorted events handed to
+///   <see cref="Render"/>; it owns no navigation or event state and performs
+///   no querying. Kept separate from <see cref="SidebarRenderer"/> so
+///   calendar-list and selected-day concerns don't share a class.</item>
+/// </list>
 /// </summary>
 internal sealed class SelectedDayRenderer
 {
-    private static readonly Windows.UI.Color MutedText =
-        new() { A = 255, R = 100, G = 100, B = 100 };
-
     private readonly StackPanel _container;
 
     public SelectedDayRenderer(StackPanel container)
@@ -54,7 +61,7 @@ internal sealed class SelectedDayRenderer
         {
             Text = $"{events.Count} event{(events.Count == 1 ? "" : "s")}",
             FontSize = 12,
-            Foreground = new SolidColorBrush(MutedText)
+            Foreground = new SolidColorBrush(CalendarRenderHelper.MutedText)
         });
 
         if (events.Count == 0)
@@ -64,7 +71,7 @@ internal sealed class SelectedDayRenderer
                 Text = "No events scheduled.",
                 FontSize = 13,
                 TextWrapping = TextWrapping.Wrap,
-                Foreground = new SolidColorBrush(MutedText),
+                Foreground = new SolidColorBrush(CalendarRenderHelper.MutedText),
                 Margin = new Thickness(0, 2, 0, 0)
             });
             return;
@@ -96,7 +103,7 @@ internal sealed class SelectedDayRenderer
                 : capturedEvt.StartTimeUtc.ToLocalTime().ToString("h:mm tt"),
             FontSize = 12,
             Width = 64,
-            Foreground = new SolidColorBrush(MutedText),
+            Foreground = new SolidColorBrush(CalendarRenderHelper.MutedText),
             VerticalAlignment = VerticalAlignment.Center
         };
 

@@ -67,11 +67,16 @@ Rendering and dialog construction live in dedicated, single-purpose classes
 under `Views/`:
 
 - `Views/Rendering/CalendarGridRenderer` — main month grid and day cells
+- `Views/Rendering/WeekViewRenderer` — week strip of seven day columns,
+  derived from `_selectedDate`
 - `Views/Rendering/MiniMonthRenderer` — compact sidebar month navigator
 - `Views/Rendering/SelectedDayRenderer` — selected-day detail panel
   (date, event count, event list, empty state)
 - `Views/Rendering/SidebarRenderer` — calendar list, visibility toggles, and
   the add / edit / delete calendar affordances
+- `Views/Rendering/CalendarRenderHelper` — shared rendering primitives (event
+  chip, day-container and day-number visuals, common colors) used by the month
+  grid and week view; renderers still own their own layout
 - `Views/Dialogs/EventDialogService` — Create/Edit Event dialogs
 - `Views/Dialogs/CalendarDialogService` — Create/Edit/Delete Calendar dialogs
 - `Views/Popovers/EventPopover` — read-only event summary popover
@@ -80,7 +85,10 @@ Shared date/color conversions live in `Helpers/` (`DateHelpers`,
 `ColorHelper`) so rendering classes don't duplicate them. Month-grid
 geometry (week count + Sunday-aligned cell dates) is produced once by
 `DateHelpers.BuildMonthGrid` and consumed by both the main grid and the
-mini month, so the two never drift apart.
+mini month, so the two never drift apart. Shared *visual* construction
+(event chips, selectable day-cell styling) lives in
+`Views/Rendering/CalendarRenderHelper`, so the month and week renderers share
+appearance and interaction without copy-pasting cell/chip code.
 
 ## Navigation State
 
@@ -100,13 +108,20 @@ shown. Selection has several drivers, all funneling into `_selectedDate`:
   create-event dialog.
 - Today button — selects today and shows its month.
 
-`MainWindow.SelectDate` is the single in-month selection path: it updates
-`_selectedDate` and refreshes only what depends on it (mini-month + grid
-highlights and the selected-day panel) without reloading events. Cross-month
-changes go through `RefreshMonthAsync`, which reloads events and re-renders
-everything, including the selected-day panel. The selected-day panel reads
-its events from the already-loaded `_eventsByDate`, so it never introduces a
-competing query or date model.
+`MainWindow.SelectDate` is the single incremental selection path: it updates
+`_selectedDate` and refreshes only what depends on it (mini-month, main grid,
+and week view highlights, plus the selected-day panel) without reloading
+events. Cross-month changes (and, in Week View, cross-week changes) go through
+`RefreshActiveViewAsync`, which reloads events and re-renders the active view. The
+selected-day panel reads its events from the already-loaded `_eventsByDate`,
+so it never introduces a competing query or date model.
+
+Week View is a second consumer of this same model: `_currentView` selects
+which main view renders, the visible week is derived from `_selectedDate` via
+`DateHelpers.BuildWeek` (no stored week), and its events come from the shared
+`_eventsByDate` (loaded for the week's range by the same `LoadEventsAsync`).
+Day selection, activation, and event clicks reuse the same callbacks as the
+month grid.
 
 These are plain classes instantiated directly by MainWindow — no DI
 container, event bus, or MVVM framework. See "Avoid Premature MVVM" in
