@@ -15,7 +15,7 @@ using System.Threading.Tasks;
 namespace Chronicle
 {
     /// <summary>The main content view. Pure UI mode — not navigation state.</summary>
-    internal enum CalendarView { Month, Week }
+    internal enum CalendarView { Month, Week, Day }
 
     public sealed partial class MainWindow : Window
     {
@@ -27,6 +27,7 @@ namespace Chronicle
         private readonly MiniMonthRenderer _miniMonthRenderer;
         private readonly SelectedDayRenderer _selectedDayRenderer;
         private readonly WeekViewRenderer _weekViewRenderer;
+        private readonly DayViewRenderer _dayViewRenderer;
         private readonly EventDialogService _eventDialogService;
         private readonly CalendarDialogService _calendarDialogService;
 
@@ -67,6 +68,7 @@ namespace Chronicle
             _miniMonthRenderer = new MiniMonthRenderer(MiniMonthPanel);
             _selectedDayRenderer = new SelectedDayRenderer(SelectedDayPanel);
             _weekViewRenderer = new WeekViewRenderer(WeekViewRoot);
+            _dayViewRenderer = new DayViewRenderer(DayViewRoot);
             _eventDialogService = new EventDialogService(
                 _eventRepository, _calendarRepository, () => Content.XamlRoot, RefreshActiveViewAsync);
             _calendarDialogService = new CalendarDialogService(
@@ -89,6 +91,7 @@ namespace Chronicle
 
             MonthViewToggle.Click += (s, e) => SwitchView(CalendarView.Month);
             WeekViewToggle.Click += (s, e) => SwitchView(CalendarView.Week);
+            DayViewToggle.Click += (s, e) => SwitchView(CalendarView.Day);
 
             DispatcherQueue.TryEnqueue(async () => await InitializeCalendarAsync());
         }
@@ -142,14 +145,18 @@ namespace Chronicle
         {
             await LoadEventsAsync();
 
-            if (_currentView == CalendarView.Month)
+            switch (_currentView)
             {
-                _calendarGridRenderer.RenderDayHeaders();
-                RenderCalendarGrid();
-            }
-            else
-            {
-                RenderWeekView();
+                case CalendarView.Month:
+                    _calendarGridRenderer.RenderDayHeaders();
+                    RenderCalendarGrid();
+                    break;
+                case CalendarView.Week:
+                    RenderWeekView();
+                    break;
+                case CalendarView.Day:
+                    RenderDayView();
+                    break;
             }
 
             RenderMiniMonth();
@@ -159,9 +166,12 @@ namespace Chronicle
 
         private void UpdateHeader()
         {
-            MonthYearText.Text = _currentView == CalendarView.Week
-                ? FormatWeekRange(_selectedDate)
-                : _displayMonth.ToString("MMMM yyyy");
+            MonthYearText.Text = _currentView switch
+            {
+                CalendarView.Week => FormatWeekRange(_selectedDate),
+                CalendarView.Day => _selectedDate.ToString("dddd, MMMM d, yyyy"),
+                _ => _displayMonth.ToString("MMMM yyyy")
+            };
         }
 
         private static string FormatWeekRange(DateTime dateInWeek)
@@ -183,22 +193,46 @@ namespace Chronicle
 
         private async void PrevMonthButton_Click(object sender, RoutedEventArgs e)
         {
-            if (_currentView == CalendarView.Week)
-                StepWeek(-1);
-            else
-                _displayMonth = _displayMonth.AddMonths(-1);
-
+            StepPeriod(-1);
             await RefreshActiveViewAsync();
         }
 
         private async void NextMonthButton_Click(object sender, RoutedEventArgs e)
         {
-            if (_currentView == CalendarView.Week)
-                StepWeek(1);
-            else
-                _displayMonth = _displayMonth.AddMonths(1);
-
+            StepPeriod(1);
             await RefreshActiveViewAsync();
+        }
+
+        /// <summary>
+        /// Moves Previous/Next by one period of the active view: a month in
+        /// Month view, a week in Week view, a single day in Day view.
+        /// </summary>
+        private void StepPeriod(int direction)
+        {
+            switch (_currentView)
+            {
+                case CalendarView.Week:
+                    StepWeek(direction);
+                    break;
+                case CalendarView.Day:
+                    StepDay(direction);
+                    break;
+                default:
+                    _displayMonth = _displayMonth.AddMonths(direction);
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// Moves the visible day by <paramref name="direction"/> days. Day View
+        /// derives entirely from <see cref="_selectedDate"/>, so paging the day
+        /// is just moving the selected day; the displayed month follows so the
+        /// mini-month and month range stay in sync.
+        /// </summary>
+        private void StepDay(int direction)
+        {
+            _selectedDate = DateHelpers.GetLocalDayKey(_selectedDate.AddDays(direction));
+            _displayMonth = DateHelpers.GetMonthStartLocal(_selectedDate);
         }
 
         private async void TodayButton_Click(object sender, RoutedEventArgs e)
@@ -239,6 +273,8 @@ namespace Chronicle
                 view == CalendarView.Month ? Visibility.Visible : Visibility.Collapsed;
             WeekViewRoot.Visibility =
                 view == CalendarView.Week ? Visibility.Visible : Visibility.Collapsed;
+            DayViewRoot.Visibility =
+                view == CalendarView.Day ? Visibility.Visible : Visibility.Collapsed;
 
             await RefreshActiveViewAsync();
         }
@@ -247,6 +283,7 @@ namespace Chronicle
         {
             MonthViewToggle.IsChecked = _currentView == CalendarView.Month;
             WeekViewToggle.IsChecked = _currentView == CalendarView.Week;
+            DayViewToggle.IsChecked = _currentView == CalendarView.Day;
         }
 
         // ── Sidebar ───────────────────────────────────────────────────────────
@@ -347,8 +384,14 @@ namespace Chronicle
             var previousDate = _selectedDate;
             _selectedDate = DateHelpers.GetLocalDayKey(date);
 
-            if (_currentView == CalendarView.Week
-                && !DateHelpers.IsSameWeek(previousDate, _selectedDate))
+            // Some views' loaded ranges don't cover the new day, so they need a
+            // full refresh: Week View when the week changes, Day View whenever
+            // the day changes (its range is a single day).
+            bool crossesLoadedRange =
+                (_currentView == CalendarView.Week && !DateHelpers.IsSameWeek(previousDate, _selectedDate))
+                || (_currentView == CalendarView.Day && !DateHelpers.IsSameDay(previousDate, _selectedDate));
+
+            if (crossesLoadedRange)
             {
                 _displayMonth = DateHelpers.GetMonthStartLocal(_selectedDate);
                 await RefreshActiveViewAsync();
@@ -378,11 +421,15 @@ namespace Chronicle
 
         private async Task LoadEventsAsync()
         {
-            // Same pipeline for both views; only the queried range differs.
-            // Week View can straddle a month boundary, so it loads its own week.
-            var (rangeStart, rangeEnd) = _currentView == CalendarView.Week
-                ? DateHelpers.GetWeekRangeUtc(_selectedDate)
-                : DateHelpers.GetMonthRangeUtc(_displayMonth);
+            // Same pipeline for every view; only the queried range differs.
+            // Week/Day derive their range from _selectedDate (and can straddle a
+            // month boundary); Month uses _displayMonth.
+            var (rangeStart, rangeEnd) = _currentView switch
+            {
+                CalendarView.Week => DateHelpers.GetWeekRangeUtc(_selectedDate),
+                CalendarView.Day => DateHelpers.GetDayRangeUtc(_selectedDate),
+                _ => DateHelpers.GetMonthRangeUtc(_displayMonth)
+            };
 
             var events = await _eventRepository.GetInRangeAsync(rangeStart, rangeEnd);
 
@@ -431,6 +478,29 @@ namespace Chronicle
         {
             SelectDate(dayDate);
             await _eventDialogService.ShowCreateEventDialogAsync(dayDate);
+        }
+
+        // ── Day view rendering ────────────────────────────────────────────────
+
+        private void RenderDayView()
+        {
+            var dayKey = DateHelpers.GetLocalDayKey(_selectedDate);
+            var events = _eventsByDate.GetValueOrDefault(dayKey) ?? new List<Event>();
+            _dayViewRenderer.Render(
+                _selectedDate,
+                events,
+                _allCalendars,
+                onEventClicked: ShowEventPopover,
+                onCreateAt: OnDayTimeActivated);
+        }
+
+        /// <summary>
+        /// Double-tapping an empty time slot in Day View opens the create-event
+        /// dialog for the selected day, pre-filled with the slot's start hour.
+        /// </summary>
+        private async void OnDayTimeActivated(TimeSpan startTime)
+        {
+            await _eventDialogService.ShowCreateEventDialogAsync(_selectedDate, startTime);
         }
 
         // ── Event popover ─────────────────────────────────────────────────────

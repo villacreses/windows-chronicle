@@ -90,6 +90,8 @@
                                       BorderThickness="0" IsChecked="True"/>
                         <ToggleButton x:Name="WeekViewToggle" Content="Week" Padding="16,4"
                                       BorderThickness="0"/>
+                        <ToggleButton x:Name="DayViewToggle" Content="Day" Padding="16,4"
+                                      BorderThickness="0"/>
                     </StackPanel>
                 </Border>
             </Grid>
@@ -120,6 +122,9 @@
 
             <!-- Week View (7 day columns; populated by WeekViewRenderer) -->
             <Grid x:Name="WeekViewRoot" Grid.Row="1" Visibility="Collapsed"/>
+
+            <!-- Day View (all-day band + 24h timeline; populated by DayViewRenderer) -->
+            <Grid x:Name="DayViewRoot" Grid.Row="1" Visibility="Collapsed"/>
         </Grid>
     </Grid>
 </Window>

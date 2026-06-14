@@ -19,22 +19,38 @@ Build the complete provider-agnostic calendar experience before beginning accoun
 - Calendar Management (create / edit / delete / color)
 - Date Selection experience (selected-day panel + click/double-click model)
 - Week View (first additional view, built on the selection model)
+- Day View (single-day 24h timeline, built on the same selection model)
 
 ### UI CONSTRAINT (TEMPORARY)
 
 A dev-only dark theme override is active to reduce visual fatigue.
 
 This does NOT change execution priority:
-1. Day View
-2. Recurrence
-3. Provider integrations
-4. Design overhaul
+1. Recurrence
+2. Provider integrations
+3. Design overhaul
 
 No UI polish work should be introduced outside of Theme infrastructure stability.
 
 ## Current Milestone
 
-Additional Views — Day view (see Next Milestones)
+Recurrence (see Next Milestones)
+
+## Recently Completed: Day View
+
+Delivered:
+
+- Day View as a third view in the Month/Week/Day segmented switcher, derived
+  entirely from `_selectedDate` (no new navigation state)
+- `DayViewRenderer`: optional all-day band over a scrollable 24-hour timeline
+  (00:00–23:00), solid hour + dashed half-hour lines, current-time indicator on
+  today, timed events positioned by start/end with overlapping events packed
+  into side-by-side columns, auto-scroll to ~7am/first event
+- Previous/Next step one day in Day View (`StepDay` via `StepPeriod`); event
+  click opens the popover; double-click an empty slot creates pre-filled with
+  the slot's hour
+- Reuses the existing event pipeline (`LoadEventsAsync` day range +
+  `_eventsByDate`), `CalendarRenderHelper`, `ColorHelper`, and `Theme`
 
 ## Recently Completed: Week View
 
@@ -82,10 +98,6 @@ Delivered:
   `ReloadCalendarsAndRefreshAsync`
 
 ## Next Milestones
-
-### Additional Views
-
-- Day view
 
 ### Recurrence
 

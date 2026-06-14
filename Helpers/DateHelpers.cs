@@ -135,4 +135,17 @@ internal static class DateHelpers
     /// <summary>True if both dates fall in the same Sunday-aligned week.</summary>
     public static bool IsSameWeek(DateTime a, DateTime b)
         => GetWeekStart(a) == GetWeekStart(b);
+
+    /// <summary>
+    /// Gets the start (UTC) and end (UTC, inclusive) boundaries of the single
+    /// local day containing <paramref name="date"/>. Mirrors
+    /// <see cref="GetMonthRangeUtc"/> / <see cref="GetWeekRangeUtc"/> so Day
+    /// View reuses the same event-loading pipeline.
+    /// </summary>
+    public static (DateTime startUtc, DateTime endUtc) GetDayRangeUtc(DateTime date)
+    {
+        var dayStartLocal = GetLocalDayKey(date);
+        var dayEndUtc = dayStartLocal.AddDays(1).ToUniversalTime().AddTicks(-1);
+        return (dayStartLocal.ToUniversalTime(), dayEndUtc);
+    }
 }

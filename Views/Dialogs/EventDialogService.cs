@@ -127,7 +127,7 @@ internal sealed class EventDialogService
 
     // ── Create Event dialog ───────────────────────────────────────────────
 
-    public async Task ShowCreateEventDialogAsync(DateTime selectedDay)
+    public async Task ShowCreateEventDialogAsync(DateTime selectedDay, TimeSpan? startTime = null)
     {
         try
         {
@@ -153,12 +153,16 @@ internal sealed class EventDialogService
                 XamlRoot = _getXamlRoot()
             };
 
+            // Default to 9–10am; Day View can pre-fill the double-clicked hour.
+            var start = startTime ?? new TimeSpan(9, 0, 0);
+            var end = start + TimeSpan.FromHours(1);
+
             var (panel, titleBox, startPicker, endPicker, errorBlock, getCalendar) =
                 BuildEventForm(
                     calendars,
                     initialTitle: "",
-                    initialStart: new TimeSpan(9, 0, 0),
-                    initialEnd: new TimeSpan(10, 0, 0),
+                    initialStart: start,
+                    initialEnd: end,
                     initialCalendarIndex: 0);
 
             dialog.Content = panel;

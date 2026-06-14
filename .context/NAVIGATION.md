@@ -11,10 +11,11 @@ behavior; it is not a redesign.
   the mini month.
 - `_selectedDate` is the user's focused calendar day. It defaults to today
   and is intentionally separate from `_displayMonth`.
-- `_currentView` (`Month` | `Week`) is the active main view. It is a display
-  mode, not date state: Week View *derives* its visible week from
-  `_selectedDate` via `DateHelpers.BuildWeek`. There is no separate
-  "displayed week" field — moving the week means moving `_selectedDate`.
+- `_currentView` (`Month` | `Week` | `Day`) is the active main view. It is a
+  display mode, not date state: Week View *derives* its visible week from
+  `_selectedDate` via `DateHelpers.BuildWeek`, and Day View *is* `_selectedDate`.
+  There is no separate "displayed week" or "displayed day" field — moving the
+  week or day means moving `_selectedDate`.
 
 There remains exactly one source of truth for date focus: `_selectedDate`
 (with `_displayMonth` as the month anchor for the month grid and mini month).
@@ -40,22 +41,24 @@ Initial window construction:
 - `_displayMonth` is set to the first day of the current month.
 - `_selectedDate` is set to today's local day key.
 
-Toolbar Previous/Next navigation (view-aware):
+Toolbar Previous/Next navigation (view-aware via `StepPeriod`):
 
-- In Month view, `PrevMonthButton_Click` / `NextMonthButton_Click` subtract /
-  add one month to `_displayMonth`, then call `RefreshActiveViewAsync`. They do not
-  change `_selectedDate`.
+- In Month view, Previous/Next subtract / add one month to `_displayMonth`,
+  then call `RefreshActiveViewAsync`. They do not change `_selectedDate`.
 - In Week view, they call `StepWeek(±1)`, which moves `_selectedDate` by seven
-  days and re-anchors `_displayMonth` to the selected date's month, then call
-  `RefreshActiveViewAsync`. Because the week is derived from `_selectedDate`, paging
-  the week and moving the selected day are the same operation.
+  days and re-anchors `_displayMonth` to the selected date's month. Because the
+  week is derived from `_selectedDate`, paging the week and moving the selected
+  day are the same operation.
+- In Day view, they call `StepDay(±1)`, which moves `_selectedDate` by one day
+  and re-anchors `_displayMonth`. Same principle as Week — Day View *is* the
+  selected day, so paging it is moving `_selectedDate`.
 
 View switching:
 
-- `SwitchView` sets `_currentView`, toggles `MonthViewRoot` / `WeekViewRoot`
-  visibility, syncs the toggle buttons, and calls `RefreshActiveViewAsync` so the
-  newly active view loads its range and renders. It introduces no new date
-  state.
+- `SwitchView` sets `_currentView`, toggles `MonthViewRoot` / `WeekViewRoot` /
+  `DayViewRoot` visibility, syncs the toggle buttons, and calls
+  `RefreshActiveViewAsync` so the newly active view loads its range and renders.
+  It introduces no new date state.
 
 Today navigation:
 
@@ -94,6 +97,19 @@ Week view day selection:
   `_displayMonth` and calls `RefreshActiveViewAsync`, because the visible seven
   days and the loaded range change.
 
+Day view:
+
+- Day View renders `_selectedDate`: an optional all-day band over a scrollable
+  24-hour timeline, with timed events positioned by start/end (overlapping
+  events packed into side-by-side columns) and a current-time indicator on
+  today. It reads the day's events from the shared `_eventsByDate`.
+- Clicking an event opens the same popover (`ShowEventPopover`). Double-clicking
+  an empty time slot calls `OnDayTimeActivated`, which opens the create-event
+  dialog pre-filled with the selected day and the slot's start hour.
+- Because Day View's loaded range is a single day, any `SelectDate` to a
+  different day re-anchors `_displayMonth` and calls `RefreshActiveViewAsync`
+  (the single-day cache never covers another day).
+
 Calendar/sidebar changes:
 
 - Calendar visibility changes, calendar create/edit/delete, event delete, and
@@ -112,7 +128,8 @@ Calendar/sidebar changes:
 
 Cross-month date selection from the mini month does not use the incremental
 path. It updates both navigation fields and calls `RefreshActiveViewAsync`, because
-the event range changes. The same is true of cross-week selection in Week View.
+the event range changes. The same is true of cross-week selection in Week View
+and any day change in Day View.
 
 The selected-day panel reads from `_eventsByDate`, which contains events for
 the currently loaded range (the displayed month in Month view, or the visible
@@ -123,12 +140,12 @@ week in Week view) after calendar visibility filtering.
 `RefreshActiveViewAsync` is the full refresh path for whichever view is active.
 
 - It loads events via `LoadEventsAsync` for the active view's range: the
-  `_displayMonth` month range in Month view, or the `_selectedDate` week range
-  in Week view (one repository call, one filter, one `_eventsByDate` store —
-  no separate event pipeline per view).
-- It renders the active main view (month grid + day headers, or the week
-  columns), then the mini month and the selected-day panel.
-- It updates the period header (month name or week range).
+  `_displayMonth` month range in Month view, the `_selectedDate` week range in
+  Week view, or the `_selectedDate` day range in Day view (one repository call,
+  one filter, one `_eventsByDate` store — no separate event pipeline per view).
+- It renders the active main view (month grid + day headers, the week columns,
+  or the day timeline), then the mini month and the selected-day panel.
+- It updates the period header (month name, week range, or full day date).
 
 Toolbar and mini-month arrow navigation change `_displayMonth` only. They do
 not implicitly move `_selectedDate` into the newly displayed month.

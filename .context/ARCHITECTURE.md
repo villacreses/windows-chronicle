@@ -69,6 +69,8 @@ under `Views/`:
 - `Views/Rendering/CalendarGridRenderer` — main month grid and day cells
 - `Views/Rendering/WeekViewRenderer` — week strip of seven day columns,
   derived from `_selectedDate`
+- `Views/Rendering/DayViewRenderer` — single-day all-day band + scrollable
+  24-hour timeline, derived from `_selectedDate`
 - `Views/Rendering/MiniMonthRenderer` — compact sidebar month navigator
 - `Views/Rendering/SelectedDayRenderer` — selected-day detail panel
   (date, event count, event list, empty state)
@@ -149,12 +151,15 @@ events. Cross-month changes (and, in Week View, cross-week changes) go through
 selected-day panel reads its events from the already-loaded `_eventsByDate`,
 so it never introduces a competing query or date model.
 
-Week View is a second consumer of this same model: `_currentView` selects
-which main view renders, the visible week is derived from `_selectedDate` via
-`DateHelpers.BuildWeek` (no stored week), and its events come from the shared
-`_eventsByDate` (loaded for the week's range by the same `LoadEventsAsync`).
-Day selection, activation, and event clicks reuse the same callbacks as the
-month grid.
+Week View and Day View are further consumers of this same model: `_currentView`
+selects which main view renders, the visible week/day is derived from
+`_selectedDate` (no stored week or day — `DateHelpers.BuildWeek` for the week,
+`_selectedDate` itself for the day), and their events come from the shared
+`_eventsByDate` (loaded for the active view's range by the same
+`LoadEventsAsync`). Day selection, activation, and event clicks reuse the same
+callbacks as the month grid. Day View adds one callback —
+double-clicking an empty timeline slot opens create pre-filled with that hour
+via an optional `startTime` on `EventDialogService.ShowCreateEventDialogAsync`.
 
 These are plain classes instantiated directly by MainWindow — no DI
 container, event bus, or MVVM framework. See "Avoid Premature MVVM" in
