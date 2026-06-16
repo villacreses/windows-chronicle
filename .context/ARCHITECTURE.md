@@ -76,6 +76,11 @@ under `Views/`:
   (date, event count, event list, empty state)
 - `Views/Rendering/SidebarRenderer` — calendar list, visibility toggles, and
   the add / edit / delete calendar affordances
+- `Views/Rendering/TimelineRenderHelper` — stateless helper that builds a
+  single day's timed-event timeline (gutter, gridlines, now-line, overlap-packed
+  event blocks). Extracted from `DayViewRenderer` so `WeekViewRenderer` can
+  reuse it to render seven timelines side by side; each call returns a
+  self-contained `UIElement` with no shared mutable state.
 - `Views/Rendering/CalendarRenderHelper` — shared rendering primitives (event
   chip, day-container and day-number visuals, common colors) used by the month
   grid and week view; renderers still own their own layout
