@@ -44,15 +44,21 @@ internal static class TimelineRenderHelper
     public const double TotalHeight = Hours * HourHeight;
 
     /// <summary>
-    /// Main entry point: renders a single day's timeline (gutter + gridlines +
-    /// now-line + timed events) for <paramref name="dayDate"/>.
-    /// <paramref name="eventsForDay"/> must contain only timed events (all-day
-    /// events are handled by the caller). <paramref name="onEventClicked"/> fires
-    /// when an event block is tapped (the <see cref="FrameworkElement"/> is the
-    /// block, used to anchor the popover); <paramref name="onCreateAt"/> fires
-    /// when an empty time slot is double-tapped, with the slot's start hour.
+    /// Returns a standalone time gutter for use when one gutter is shared across
+    /// multiple day columns (e.g., Week View puts one gutter on the far left with
+    /// seven <see cref="BuildDayColumnContent"/> results to its right).
     /// </summary>
-    public static UIElement BuildDayTimeline(
+    public static FrameworkElement BuildSharedGutter()
+        => RenderTimeGutter(GutterWidth, TotalHeight);
+
+    /// <summary>
+    /// Builds just the day column body — gridlines, now-line, and timed event
+    /// blocks — without the gutter wrapper. Used by <c>WeekViewRenderer</c>,
+    /// which supplies a single shared gutter for all seven columns.
+    /// <paramref name="onCreateAt"/> fires when an empty time slot is
+    /// double-tapped, with the slot's start hour.
+    /// </summary>
+    public static FrameworkElement BuildDayColumnContent(
         DateTime dayDate,
         IList<Event> eventsForDay,
         IList<Calendar> calendars,
@@ -60,18 +66,11 @@ internal static class TimelineRenderHelper
         Action<Event, FrameworkElement> onEventClicked,
         Action<TimeSpan> onCreateAt)
     {
-        var timeline = new Grid { Height = TotalHeight };
-        timeline.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(GutterWidth) });
-        timeline.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-
-        var gutter = RenderTimeGutter(GutterWidth, TotalHeight);
-        Grid.SetColumn(gutter, 0);
-        timeline.Children.Add(gutter);
-
+        // Transparent background makes empty areas hit-testable so
+        // double-tap-to-create works between events.
         var dayColumn = new Grid
         {
-            // A transparent background makes empty areas hit-testable so
-            // double-tap-to-create works between events.
+            Height = TotalHeight,
             Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent)
         };
         dayColumn.Children.Add(RenderGridlines(TotalHeight));
@@ -104,8 +103,37 @@ internal static class TimelineRenderHelper
             onCreateAt(TimeSpan.FromHours(hour));
         };
 
-        Grid.SetColumn(dayColumn, 1);
-        timeline.Children.Add(dayColumn);
+        return dayColumn;
+    }
+
+    /// <summary>
+    /// Main entry point for Day View: renders a complete timeline (gutter +
+    /// gridlines + now-line + timed events) for <paramref name="dayDate"/>.
+    /// <paramref name="eventsForDay"/> must contain only timed events (all-day
+    /// events are handled by the caller). <paramref name="onEventClicked"/> fires
+    /// when an event block is tapped (the <see cref="FrameworkElement"/> is the
+    /// block, used to anchor the popover); <paramref name="onCreateAt"/> fires
+    /// when an empty time slot is double-tapped, with the slot's start hour.
+    /// </summary>
+    public static UIElement BuildDayTimeline(
+        DateTime dayDate,
+        IList<Event> eventsForDay,
+        IList<Calendar> calendars,
+        TimeZoneInfo timeZone,
+        Action<Event, FrameworkElement> onEventClicked,
+        Action<TimeSpan> onCreateAt)
+    {
+        var timeline = new Grid { Height = TotalHeight };
+        timeline.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(GutterWidth) });
+        timeline.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+        var gutter = RenderTimeGutter(GutterWidth, TotalHeight);
+        Grid.SetColumn(gutter, 0);
+        timeline.Children.Add(gutter);
+
+        var dayCol = BuildDayColumnContent(dayDate, eventsForDay, calendars, timeZone, onEventClicked, onCreateAt);
+        Grid.SetColumn(dayCol, 1);
+        timeline.Children.Add(dayCol);
 
         return timeline;
     }

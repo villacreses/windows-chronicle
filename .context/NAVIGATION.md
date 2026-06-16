@@ -87,13 +87,18 @@ Main grid day selection (Month view):
 - A double tap on an in-month day calls `OnDayActivated`, which calls
   `SelectDate` and opens the create-event dialog for that day.
 
-Week view day selection:
+Week view day selection and time-slot interaction:
 
-- Each day column reports the same `SelectDate` (single tap) and
-  `OnDayActivated` (double tap) callbacks as the month grid — Week View is
-  just another consumer of the selection model.
-- Selecting a day already in the visible week uses the incremental path.
-  Selecting a day in a different week (e.g. from the mini month) re-anchors
+- Tapping a day header calls `SelectDate` — Week View is a consumer of the
+  same selection model as Month View.
+- Double-tapping an empty timeline slot calls `OnWeekTimeSlotActivated(day,
+  hour)`, which selects the day and opens the create-event dialog pre-filled
+  with that day and start hour.
+- Selecting a day already in the visible week uses the incremental path; the
+  week view is fully re-rendered to update the selected day-header highlight
+  (the new renderer has no `UpdateSelectedDate` — rebuilding is cheap and
+  keeps the renderer stateless).
+- Selecting a day in a different week (e.g. from the mini month) re-anchors
   `_displayMonth` and calls `RefreshActiveViewAsync`, because the visible seven
   days and the loaded range change.
 

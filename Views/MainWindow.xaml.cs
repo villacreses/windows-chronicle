@@ -400,7 +400,10 @@ namespace Chronicle
 
             _miniMonthRenderer.UpdateSelectedDate(previousDate, _selectedDate);
             _calendarGridRenderer.UpdateSelectedDate(previousDate, _selectedDate);
-            _weekViewRenderer.UpdateSelectedDate(previousDate, _selectedDate);
+            // Week view has no incremental update path — re-render to refresh
+            // the selected day header highlight.
+            if (_currentView == CalendarView.Week)
+                RenderWeekView();
             RenderSelectedDay();
         }
 
@@ -466,13 +469,24 @@ namespace Chronicle
                 _selectedDate,
                 _eventsByDate,
                 _allCalendars,
+                showAllDayBand: true,
                 onDaySelected: SelectDate,
-                onDayActivated: OnDayActivated,
+                onTimeSlotActivated: OnWeekTimeSlotActivated,
                 onEventClicked: ShowEventPopover);
         }
 
         /// <summary>
-        /// Double-tapping a day selects it and opens the create-event dialog.
+        /// Double-tapping an empty time slot in Week View selects the day and
+        /// opens the create-event dialog pre-filled with the slot's start hour.
+        /// </summary>
+        private async void OnWeekTimeSlotActivated(DateTime dayDate, TimeSpan startTime)
+        {
+            SelectDate(dayDate);
+            await _eventDialogService.ShowCreateEventDialogAsync(dayDate, startTime);
+        }
+
+        /// <summary>
+        /// Double-tapping a day in Month View selects it and opens the create-event dialog.
         /// </summary>
         private async void OnDayActivated(DateTime dayDate)
         {

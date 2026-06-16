@@ -67,8 +67,14 @@ Rendering and dialog construction live in dedicated, single-purpose classes
 under `Views/`:
 
 - `Views/Rendering/CalendarGridRenderer` — main month grid and day cells
-- `Views/Rendering/WeekViewRenderer` — week strip of seven day columns,
-  derived from `_selectedDate`
+- `Views/Rendering/WeekViewRenderer` — 7-column 24-hour timeline grid for the
+  week (Sun→Sat) containing `_selectedDate`: clickable day headers, an optional
+  all-day events band (shown only when all-day events exist), and seven day
+  content columns built by `TimelineRenderHelper.BuildDayColumnContent` behind a
+  single shared gutter from `TimelineRenderHelper.BuildSharedGutter`. Reports
+  day-header taps, empty time-slot double-taps, and event taps back to
+  `MainWindow`. Stateless beyond `_host` — rebuilt on every `Render()` call (no
+  `UpdateSelectedDate`).
 - `Views/Rendering/DayViewRenderer` — single-day all-day band + scrollable
   24-hour timeline, derived from `_selectedDate`
 - `Views/Rendering/MiniMonthRenderer` — compact sidebar month navigator
