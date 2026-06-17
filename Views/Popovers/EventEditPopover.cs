@@ -1,0 +1,342 @@
+using Chronicle.Helpers;
+using Chronicle.Models;
+using Microsoft.UI.Text;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
+using Microsoft.UI.Xaml.Media;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
+using Windows.Foundation;
+
+namespace Chronicle.Views.Popovers;
+
+/// <summary>
+/// A light-dismiss create/edit event editor shown in a
+/// <see cref="Flyout"/> anchored to a point in the window (e.g. the clicked
+/// time slot). This is the sole event-editing UI; the previous modal
+/// `EventDialogService` has been removed.
+///
+/// The form is built programmatically (Name, Calendar, Start date+time, End
+/// date+time, Save/Cancel). <see cref="ShowCreateEventAsync"/> /
+/// <see cref="ShowEditEventAsync"/> return the resulting <see cref="Event"/> on
+/// save, or <c>null</c> if the popover is cancelled or light-dismissed.
+///
+/// The popover performs no persistence — it only constructs and returns the
+/// <see cref="Event"/>; the caller saves it via the event repository.
+/// </summary>
+public static class EventEditPopover
+{
+    private const double FormWidth = 340;
+
+    /// <summary>
+    /// Shows the create-event popover anchored at <paramref name="anchorPoint"/>
+    /// (relative to the window content). The form defaults to
+    /// <paramref name="suggestedStartTime"/> for one hour, the first available
+    /// calendar selected. Returns the new <see cref="Event"/> on save, or
+    /// <c>null</c> if dismissed without saving.
+    /// </summary>
+    public static Task<Event?> ShowCreateEventAsync(
+        Window parentWindow,
+        Point anchorPoint,
+        DateTime suggestedStartTime,
+        IList<Calendar> availableCalendars)
+    {
+        return ShowAsync(
+            parentWindow,
+            anchorPoint,
+            heading: "Create Event",
+            initialTitle: "",
+            initialStartLocal: suggestedStartTime,
+            initialEndLocal: suggestedStartTime.AddHours(1),
+            calendars: availableCalendars,
+            selectedCalendarId: availableCalendars.Count > 0 ? availableCalendars[0].Id : null,
+            buildEvent: (title, calendarId, startUtc, endUtc) =>
+            {
+                var nowUtc = DateTime.UtcNow;
+                return new Event
+                {
+                    Id = Guid.NewGuid(),
+                    CalendarId = calendarId,
+                    Title = title,
+                    StartTimeUtc = startUtc,
+                    EndTimeUtc = endUtc,
+                    Description = null,
+                    IsAllDay = false,
+                    RecurrenceRuleJson = null,
+                    CreatedAtUtc = nowUtc,
+                    UpdatedAtUtc = nowUtc
+                };
+            });
+    }
+
+    /// <summary>
+    /// Shows the edit-event popover anchored at <paramref name="anchorPoint"/>,
+    /// pre-filled from <paramref name="eventToEdit"/>. Fields not on the form
+    /// (Id, Description, IsAllDay, RecurrenceRuleJson, CreatedAtUtc) are
+    /// preserved; <c>UpdatedAtUtc</c> is refreshed. Returns the edited
+    /// <see cref="Event"/> on save, or <c>null</c> if dismissed without saving.
+    /// </summary>
+    public static Task<Event?> ShowEditEventAsync(
+        Window parentWindow,
+        Point anchorPoint,
+        Event eventToEdit,
+        IList<Calendar> availableCalendars)
+    {
+        return ShowAsync(
+            parentWindow,
+            anchorPoint,
+            heading: "Edit Event",
+            initialTitle: eventToEdit.Title,
+            initialStartLocal: eventToEdit.StartTimeUtc.ToLocalTime(),
+            initialEndLocal: eventToEdit.EndTimeUtc.ToLocalTime(),
+            calendars: availableCalendars,
+            selectedCalendarId: eventToEdit.CalendarId,
+            buildEvent: (title, calendarId, startUtc, endUtc) => new Event
+            {
+                Id = eventToEdit.Id,
+                CalendarId = calendarId,
+                Title = title,
+                StartTimeUtc = startUtc,
+                EndTimeUtc = endUtc,
+                Description = eventToEdit.Description,
+                IsAllDay = eventToEdit.IsAllDay,
+                RecurrenceRuleJson = eventToEdit.RecurrenceRuleJson,
+                CreatedAtUtc = eventToEdit.CreatedAtUtc,
+                UpdatedAtUtc = DateTime.UtcNow
+            });
+    }
+
+    // ── Shared implementation ─────────────────────────────────────────────
+
+    /// <summary>
+    /// Builds the form, wires the flyout, and bridges the non-awaitable flyout
+    /// to a <see cref="Task{Event}"/> via a <see cref="TaskCompletionSource{T}"/>.
+    /// <paramref name="buildEvent"/> receives the validated form values
+    /// (title, calendar id, start UTC, end UTC) and produces the create- or
+    /// edit-flavored <see cref="Event"/>.
+    /// </summary>
+    private static Task<Event?> ShowAsync(
+        Window parentWindow,
+        Point anchorPoint,
+        string heading,
+        string initialTitle,
+        DateTime initialStartLocal,
+        DateTime initialEndLocal,
+        IList<Calendar> calendars,
+        Guid? selectedCalendarId,
+        Func<string, Guid, DateTime, DateTime, Event> buildEvent)
+    {
+        var tcs = new TaskCompletionSource<Event?>();
+
+        // The flyout needs a FrameworkElement to anchor to; the window's content
+        // root is the natural choice, with the click point as the position.
+        if (parentWindow.Content is not FrameworkElement anchorElement)
+        {
+            tcs.SetResult(null);
+            return tcs.Task;
+        }
+
+        var root = new StackPanel
+        {
+            Orientation = Orientation.Vertical,
+            Width = FormWidth,
+            Spacing = 10
+        };
+
+        root.Children.Add(new TextBlock
+        {
+            Text = heading,
+            FontSize = 16,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = new SolidColorBrush(Theme.Text),
+            Margin = new Thickness(0, 0, 0, 2)
+        });
+
+        // Name
+        var nameBox = new TextBox
+        {
+            PlaceholderText = "Event title",
+            Text = initialTitle,
+            TextWrapping = TextWrapping.Wrap
+        };
+        root.Children.Add(MakeLabel("Name"));
+        root.Children.Add(nameBox);
+
+        // Calendar
+        var calendarCombo = new ComboBox
+        {
+            ItemsSource = calendars,
+            DisplayMemberPath = nameof(Calendar.Name),
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
+        if (selectedCalendarId is Guid wanted)
+        {
+            var match = calendars.FirstOrDefault(c => c.Id == wanted);
+            calendarCombo.SelectedItem = match ?? calendars.FirstOrDefault();
+        }
+        else if (calendars.Count > 0)
+        {
+            calendarCombo.SelectedIndex = 0;
+        }
+        root.Children.Add(MakeLabel("Calendar"));
+        root.Children.Add(calendarCombo);
+
+        // Start date + time
+        var startDate = new DatePicker { Date = new DateTimeOffset(initialStartLocal) };
+        var startTime = new TimePicker { Time = initialStartLocal.TimeOfDay };
+        root.Children.Add(MakeLabel("Start"));
+        root.Children.Add(MakeDateTimeRow(startDate, startTime));
+
+        // End date + time
+        var endDate = new DatePicker { Date = new DateTimeOffset(initialEndLocal) };
+        var endTime = new TimePicker { Time = initialEndLocal.TimeOfDay };
+        root.Children.Add(MakeLabel("End"));
+        root.Children.Add(MakeDateTimeRow(endDate, endTime));
+
+        // Inline error (hidden until validation fails).
+        var errorBlock = new TextBlock
+        {
+            Foreground = new SolidColorBrush(Theme.Danger),
+            TextWrapping = TextWrapping.Wrap,
+            Visibility = Visibility.Collapsed
+        };
+        root.Children.Add(errorBlock);
+
+        // Buttons
+        var saveButton = new Button
+        {
+            Content = "Save",
+            Style = Application.Current.Resources["AccentButtonStyle"] as Style
+        };
+        var cancelButton = new Button { Content = "Cancel" };
+
+        var buttonRow = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Spacing = 8,
+            Margin = new Thickness(0, 4, 0, 0)
+        };
+        buttonRow.Children.Add(saveButton);
+        buttonRow.Children.Add(cancelButton);
+        root.Children.Add(buttonRow);
+
+        var flyout = new Flyout { Content = root };
+
+        saveButton.Click += (s, e) =>
+        {
+            if (TryBuildEvent(
+                    nameBox, calendarCombo, startDate, startTime, endDate, endTime,
+                    buildEvent, errorBlock, out var result))
+            {
+                // Set the result before hiding so the Closed handler (which fires
+                // on Hide) can't race a null over a successful save.
+                tcs.TrySetResult(result);
+                flyout.Hide();
+            }
+        };
+
+        cancelButton.Click += (s, e) =>
+        {
+            tcs.TrySetResult(null);
+            flyout.Hide();
+        };
+
+        // Light-dismiss (clicking outside) closes the flyout without a save.
+        flyout.Closed += (s, e) => tcs.TrySetResult(null);
+
+        flyout.ShowAt(anchorElement, new FlyoutShowOptions
+        {
+            Position = anchorPoint,
+            Placement = FlyoutPlacementMode.Auto
+        });
+
+        return tcs.Task;
+    }
+
+    /// <summary>
+    /// Validates the form and, if valid, builds the <see cref="Event"/> via
+    /// <paramref name="buildEvent"/>. On any failure it populates
+    /// <paramref name="errorBlock"/>, leaves the popover open, and returns false.
+    /// </summary>
+    private static bool TryBuildEvent(
+        TextBox nameBox,
+        ComboBox calendarCombo,
+        DatePicker startDate,
+        TimePicker startTime,
+        DatePicker endDate,
+        TimePicker endTime,
+        Func<string, Guid, DateTime, DateTime, Event> buildEvent,
+        TextBlock errorBlock,
+        out Event? result)
+    {
+        result = null;
+
+        var title = nameBox.Text?.Trim();
+        if (string.IsNullOrEmpty(title))
+            return Fail(errorBlock, "Event name is required.");
+
+        if (calendarCombo.SelectedItem is not Calendar calendar)
+            return Fail(errorBlock, "Please select a calendar.");
+
+        var startUtc = DateHelpers.CombineLocalDateAndTimeAsUtc(startDate.Date.Date, startTime.Time);
+        var endUtc = DateHelpers.CombineLocalDateAndTimeAsUtc(endDate.Date.Date, endTime.Time);
+
+        if (startUtc >= endUtc)
+            return Fail(errorBlock, "End time must be after start time.");
+
+        try
+        {
+            var evt = buildEvent(title, calendar.Id, startUtc, endUtc);
+            evt.Validate(); // defensive: enforces UTC kind + end >= start
+            result = evt;
+            errorBlock.Visibility = Visibility.Collapsed;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            return Fail(errorBlock, ex.Message);
+        }
+    }
+
+    private static bool Fail(TextBlock errorBlock, string message)
+    {
+        errorBlock.Text = message;
+        errorBlock.Visibility = Visibility.Visible;
+        return false;
+    }
+
+    // ── Form building helpers ─────────────────────────────────────────────
+
+    private static TextBlock MakeLabel(string text) => new()
+    {
+        Text = text,
+        FontSize = 12,
+        Foreground = new SolidColorBrush(Theme.Text2),
+        Margin = new Thickness(0, 2, 0, 0)
+    };
+
+    /// <summary>
+    /// Lays a date picker and a time picker side by side (date wider than time)
+    /// so the pair scales with the form width.
+    /// </summary>
+    private static Grid MakeDateTimeRow(DatePicker datePicker, TimePicker timePicker)
+    {
+        datePicker.HorizontalAlignment = HorizontalAlignment.Stretch;
+        timePicker.HorizontalAlignment = HorizontalAlignment.Stretch;
+
+        var row = new Grid();
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(3, GridUnitType.Star) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(2, GridUnitType.Star) });
+
+        datePicker.Margin = new Thickness(0, 0, 8, 0);
+        Grid.SetColumn(datePicker, 0);
+        Grid.SetColumn(timePicker, 1);
+        row.Children.Add(datePicker);
+        row.Children.Add(timePicker);
+        return row;
+    }
+}

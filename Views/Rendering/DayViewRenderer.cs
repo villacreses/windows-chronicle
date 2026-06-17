@@ -43,15 +43,15 @@ internal sealed class DayViewRenderer
     /// Renders <paramref name="dayEvents"/> (already filtered to visible
     /// calendars) for <paramref name="selectedDate"/>.
     /// <paramref name="onEventClicked"/> fires when an event is tapped (opens
-    /// the popover). <paramref name="onCreateAt"/> fires when an empty time
-    /// slot is double-tapped, with the slot's start time.
+    /// the popover). <paramref name="onTimeSlotActivated"/> fires when an empty
+    /// time slot is tapped, with the day and the slot's start time.
     /// </summary>
     public void Render(
         DateTime selectedDate,
         List<Event> dayEvents,
         List<Calendar> calendars,
         Action<Event, FrameworkElement> onEventClicked,
-        Action<TimeSpan> onCreateAt)
+        Action<DateTime, TimeSpan> onTimeSlotActivated)
     {
         _host.Children.Clear();
         _host.ColumnDefinitions.Clear();
@@ -79,7 +79,7 @@ internal sealed class DayViewRenderer
                 calendars,
                 TimeZoneInfo.Local,
                 onEventClicked,
-                onCreateAt)
+                time => onTimeSlotActivated(selectedDate, time))
         };
         Grid.SetRow(scroll, 1);
         _host.Children.Add(scroll);

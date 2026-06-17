@@ -22,7 +22,7 @@ namespace Chronicle.Views.Rendering;
 /// reused: Week View will render seven of these timelines side by side. The
 /// helper is stateless (static) — each call returns a fresh, self-contained
 /// timeline element that wires up its own horizontal layout on size change and
-/// reports event taps / empty-slot double-taps back through callbacks. It owns
+/// reports event taps / empty-slot taps back through callbacks. It owns
 /// no navigation or selection state.
 ///
 /// All-day events are <b>not</b> handled here; the caller filters them out and
@@ -55,8 +55,8 @@ internal static class TimelineRenderHelper
     /// Builds just the day column body — gridlines, now-line, and timed event
     /// blocks — without the gutter wrapper. Used by <c>WeekViewRenderer</c>,
     /// which supplies a single shared gutter for all seven columns.
-    /// <paramref name="onCreateAt"/> fires when an empty time slot is
-    /// double-tapped, with the slot's start hour.
+    /// <paramref name="onCreateAt"/> fires when an empty time slot is tapped,
+    /// with the slot's start hour.
     /// </summary>
     public static FrameworkElement BuildDayColumnContent(
         DateTime dayDate,
@@ -67,7 +67,7 @@ internal static class TimelineRenderHelper
         Action<TimeSpan> onCreateAt)
     {
         // Transparent background makes empty areas hit-testable so
-        // double-tap-to-create works between events.
+        // tap-to-create works between events.
         var dayColumn = new Grid
         {
             Height = TotalHeight,
@@ -96,7 +96,9 @@ internal static class TimelineRenderHelper
         canvas.SizeChanged += (s, e) => LayoutEventsHorizontally(canvas, placed);
         dayColumn.Children.Add(canvas);
 
-        dayColumn.DoubleTapped += (s, e) =>
+        // Single tap on empty timeline space creates an event at that hour.
+        // Event blocks mark their own taps handled, so this only fires on gaps.
+        dayColumn.Tapped += (s, e) =>
         {
             var y = e.GetPosition(dayColumn).Y;
             int hour = Math.Clamp((int)(y / HourHeight), 0, Hours - 1);
@@ -113,7 +115,7 @@ internal static class TimelineRenderHelper
     /// events are handled by the caller). <paramref name="onEventClicked"/> fires
     /// when an event block is tapped (the <see cref="FrameworkElement"/> is the
     /// block, used to anchor the popover); <paramref name="onCreateAt"/> fires
-    /// when an empty time slot is double-tapped, with the slot's start hour.
+    /// when an empty time slot is tapped, with the slot's start hour.
     /// </summary>
     public static UIElement BuildDayTimeline(
         DateTime dayDate,

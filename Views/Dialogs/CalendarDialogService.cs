@@ -14,7 +14,7 @@ namespace Chronicle.Views.Dialogs;
 /// Builds and shows the Create / Edit / Delete Calendar dialogs, including
 /// the shared name + color-swatch form. Calls <c>onChanged</c> after any
 /// successful insert/update/delete so the caller can reload calendars and
-/// refresh the views. Mirrors <see cref="EventDialogService"/>.
+/// refresh the views.
 /// </summary>
 internal sealed class CalendarDialogService
 {

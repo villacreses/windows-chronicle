@@ -90,9 +90,17 @@ under `Views/`:
 - `Views/Rendering/CalendarRenderHelper` — shared rendering primitives (event
   chip, day-container and day-number visuals, common colors) used by the month
   grid and week view; renderers still own their own layout
-- `Views/Dialogs/EventDialogService` — Create/Edit Event dialogs
 - `Views/Dialogs/CalendarDialogService` — Create/Edit/Delete Calendar dialogs
-- `Views/Popovers/EventPopover` — read-only event summary popover
+- `Views/Popovers/EventPopover` — read-only event summary popover; its Edit
+  button forwards to `EventEditPopover` via the host
+- `Views/Popovers/EventEditPopover` — light-dismiss create/edit event editor: a
+  static helper that shows a programmatic form (name, calendar, start/end
+  date+time) in a `Flyout` anchored to a window point, returning the resulting
+  `Event` on save or `null` on cancel/dismiss. The sole event-editing UI — it
+  builds and returns the `Event` only; MainWindow persists via
+  `EventRepository`. Used by Month (double-tap a day), Week and Day (tap an
+  empty time slot), the selected-day panel, and the read-only event popover's
+  Edit button.
 
 Shared date/color conversions live in `Helpers/` (`DateHelpers`,
 `ColorHelper`) so rendering classes don't duplicate them.
@@ -168,9 +176,9 @@ selects which main view renders, the visible week/day is derived from
 `_selectedDate` itself for the day), and their events come from the shared
 `_eventsByDate` (loaded for the active view's range by the same
 `LoadEventsAsync`). Day selection, activation, and event clicks reuse the same
-callbacks as the month grid. Day View adds one callback —
-double-clicking an empty timeline slot opens create pre-filled with that hour
-via an optional `startTime` on `EventDialogService.ShowCreateEventDialogAsync`.
+callbacks as the month grid. Week and Day View share a `onTimeSlotActivated`
+callback — tapping an empty timeline slot opens `EventEditPopover` pre-filled
+with that day and hour.
 
 These are plain classes instantiated directly by MainWindow — no DI
 container, event bus, or MVVM framework. See "Avoid Premature MVVM" in
