@@ -6,128 +6,160 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace Chronicle.Views.Rendering;
 
 /// <summary>
-/// Renders the Week View into a host <see cref="Grid"/>: seven Sunday→Saturday
-/// day columns derived from the selected date.
+/// Renders the Week View into a host <see cref="Grid"/>: a row of clickable day
+/// headers, an optional all-day events band, and seven 24-hour timeline columns
+/// (one per day, Sun→Sat) that all scroll vertically in sync behind a single
+/// shared time gutter.
 ///
 /// Responsibilities:
 /// <list type="bullet">
-///   <item>Owns the week's <i>layout</i> — seven star-width columns, and each
-///   column's header (weekday abbreviation + circular date badge) and a
-///   scrollable list of that day's filled event-pill chips.</item>
-///   <item>Highlights today (accent-filled badge) and the selected day (soft
-///   tint + accent ring on the column), and exposes
-///   <see cref="UpdateSelectedDate"/> for incremental selection.</item>
-///   <item>Reports day selection, day activation, and event clicks back to the
-///   caller via callbacks; it owns no navigation or event state.</item>
+///   <item>Derives the seven visible days from the selected date via
+///   <see cref="DateHelpers.BuildWeek"/>; no separate week or day state is
+///   stored — rebuilding is the only update path.</item>
+///   <item>Delegates each day's timeline to
+///   <see cref="TimelineRenderHelper.BuildDayColumnContent"/>; the shared gutter
+///   comes from <see cref="TimelineRenderHelper.BuildSharedGutter"/>. Each
+///   day's overlap packing is independent.</item>
+///   <item>Reports day-header taps (<c>onDaySelected</c>), empty time-slot
+///   double-taps (<c>onTimeSlotActivated</c>), and event taps
+///   (<c>onEventClicked</c>) back to the caller via callbacks.</item>
 /// </list>
 ///
-/// Week geometry comes from <see cref="DateHelpers.BuildWeek"/> and events from
-/// the shared <c>_eventsByDate</c> store; shared visuals come from
-/// <see cref="CalendarRenderHelper"/> and colors from <see cref="Theme"/>.
+/// Colors from <see cref="Theme"/>; shared visuals from
+/// <see cref="CalendarRenderHelper"/>. The renderer is stateless beyond
+/// <c>_host</c> — each <see cref="Render"/> call rebuilds from scratch.
 /// </summary>
 internal sealed class WeekViewRenderer
 {
-    private readonly Grid _weekGrid;
-    private readonly Dictionary<DateTime, Border> _dayColumns = new();
-    private readonly Dictionary<DateTime, Border> _dayNumberCircles = new();
-    private readonly Dictionary<DateTime, TextBlock> _dayNumberBlocks = new();
+    private readonly Grid _host;
 
-    private DateTime _selectedDate;
-
-    public WeekViewRenderer(Grid weekGrid)
+    public WeekViewRenderer(Grid host)
     {
-        _weekGrid = weekGrid;
+        _host = host;
     }
 
     /// <summary>
-    /// Renders the week containing <paramref name="selectedDate"/>.
-    /// <paramref name="onDaySelected"/> fires on a single tap of a column
-    /// (selects the day); <paramref name="onDayActivated"/> on a double tap
-    /// (creates an event); <paramref name="onEventClicked"/> when an event
-    /// chip is tapped (opens the popover, anchored to the chip).
+    /// Renders the week containing <paramref name="selectedDate"/> as a
+    /// 7-column 24-hour timeline grid.
+    /// <paramref name="showAllDayBand"/> controls whether all-day events are
+    /// shown in a band above the timelines (the band is omitted entirely when
+    /// no day in the week has all-day events, regardless of this flag).
+    /// <paramref name="onDaySelected"/> fires when a day header is tapped.
+    /// <paramref name="onTimeSlotActivated"/> fires when an empty timeline slot
+    /// is double-tapped (day and start hour are provided).
+    /// <paramref name="onEventClicked"/> fires when a timed or all-day event
+    /// block is tapped (used to anchor the read-only popover).
     /// </summary>
     public void Render(
         DateTime selectedDate,
         Dictionary<DateTime, List<Event>> eventsByDate,
         List<Calendar> calendars,
+        bool showAllDayBand,
         Action<DateTime> onDaySelected,
-        Action<DateTime> onDayActivated,
+        Action<DateTime, TimeSpan> onTimeSlotActivated,
         Action<Event, FrameworkElement> onEventClicked)
     {
-        _selectedDate = DateHelpers.GetLocalDayKey(selectedDate);
-        _dayColumns.Clear();
-        _dayNumberCircles.Clear();
-        _dayNumberBlocks.Clear();
+        _host.Children.Clear();
+        _host.ColumnDefinitions.Clear();
+        _host.RowDefinitions.Clear();
+        _host.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        _host.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
 
-        _weekGrid.Children.Clear();
-        _weekGrid.ColumnDefinitions.Clear();
-        _weekGrid.RowDefinitions.Clear();
-
-        for (int i = 0; i < 7; i++)
-            _weekGrid.ColumnDefinitions.Add(
-                new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        _weekGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-
+        var weekDays = DateHelpers.BuildWeek(selectedDate);
         var today = DateHelpers.GetLocalDayKey(DateTime.Now);
+        var selKey = DateHelpers.GetLocalDayKey(selectedDate);
 
-        int column = 0;
-        foreach (var dayDate in DateHelpers.BuildWeek(selectedDate))
+        // Row 0: sticky top section — day headers + optional all-day band.
+        var topSection = new StackPanel { Orientation = Orientation.Vertical };
+        topSection.Children.Add(BuildDayHeaders(weekDays, today, selKey, onDaySelected));
+        if (showAllDayBand)
         {
-            var cell = CreateDayColumn(
-                dayDate,
-                isToday: DateHelpers.IsSameDay(dayDate, today),
-                eventsByDate, calendars, onDaySelected, onDayActivated, onEventClicked);
-
-            _dayColumns[DateHelpers.GetLocalDayKey(dayDate)] = cell;
-            Grid.SetColumn(cell, column);
-            _weekGrid.Children.Add(cell);
-            column++;
+            var allDayBand = BuildAllDayBand(weekDays, eventsByDate, calendars, onEventClicked);
+            if (allDayBand is not null)
+                topSection.Children.Add(allDayBand);
         }
-    }
+        Grid.SetRow(topSection, 0);
+        _host.Children.Add(topSection);
 
-    public void UpdateSelectedDate(DateTime previousDate, DateTime selectedDate)
-    {
-        previousDate = DateHelpers.GetLocalDayKey(previousDate);
-        selectedDate = DateHelpers.GetLocalDayKey(selectedDate);
-        _selectedDate = selectedDate;
+        // Row 1: scrollable 7-column timeline.
+        var timelinesGrid = BuildTimelinesGrid(weekDays, eventsByDate, calendars, onTimeSlotActivated, onEventClicked);
 
-        ApplyColumnVisuals(previousDate);
-        ApplyColumnVisuals(selectedDate);
-    }
+        // Auto-scroll to ~7am, or earlier if the first timed event across the
+        // whole week starts before then.
+        var allTimed = weekDays
+            .SelectMany(d => eventsByDate.GetValueOrDefault(DateHelpers.GetLocalDayKey(d)) ?? new List<Event>())
+            .Where(e => !e.IsAllDay)
+            .ToList();
+        double targetHour = 7;
+        if (allTimed.Count > 0)
+            targetHour = Math.Min(targetHour, allTimed.Min(e => e.StartTimeUtc.ToLocalTime().Hour));
 
-    private Border CreateDayColumn(
-        DateTime dayDate, bool isToday,
-        Dictionary<DateTime, List<Event>> eventsByDate,
-        List<Calendar> calendars,
-        Action<DateTime> onDaySelected,
-        Action<DateTime> onDayActivated,
-        Action<Event, FrameworkElement> onEventClicked)
-    {
-        var dayKey = DateHelpers.GetLocalDayKey(dayDate);
-        bool isSelected = DateHelpers.IsSameDay(dayDate, _selectedDate);
-
-        var border = new Border();
-        CalendarRenderHelper.ApplyDayContainerVisuals(border, isSelected);
-
-        var stackPanel = new StackPanel
+        var scroll = new ScrollViewer
         {
-            Orientation = Orientation.Vertical,
-            Margin = new Thickness(6),
-            Spacing = 6
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            Content = timelinesGrid
         };
+        var targetY = Math.Max(0, targetHour) * TimelineRenderHelper.HourHeight;
+        scroll.DispatcherQueue.TryEnqueue(() =>
+            scroll.ChangeView(null, targetY, null, disableAnimation: true));
 
-        // Header: weekday abbreviation + circular date badge.
-        var header = new StackPanel
+        Grid.SetRow(scroll, 1);
+        _host.Children.Add(scroll);
+    }
+
+    // ── Day headers ───────────────────────────────────────────────────────
+
+    private static FrameworkElement BuildDayHeaders(
+        IReadOnlyList<DateTime> weekDays,
+        DateTime today,
+        DateTime selKey,
+        Action<DateTime> onDaySelected)
+    {
+        var grid = new Grid { Height = 56 };
+        // Gutter placeholder keeps headers aligned with the timeline columns below.
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(TimelineRenderHelper.GutterWidth) });
+        foreach (var _ in weekDays)
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+        var gutterSpacer = new Border
+        {
+            BorderBrush = new SolidColorBrush(Theme.Hairline2),
+            BorderThickness = new Thickness(0, 0, 0, 1)
+        };
+        Grid.SetColumn(gutterSpacer, 0);
+        grid.Children.Add(gutterSpacer);
+
+        for (int i = 0; i < weekDays.Count; i++)
+        {
+            var dayDate = weekDays[i];
+            bool isToday = DateHelpers.IsSameDay(dayDate, today);
+            bool isSelected = DateHelpers.IsSameDay(dayDate, selKey);
+            var captured = dayDate;
+
+            var header = BuildDayHeader(dayDate, isToday, isSelected, () => onDaySelected(captured));
+            Grid.SetColumn(header, i + 1);
+            grid.Children.Add(header);
+        }
+        return grid;
+    }
+
+    private static Border BuildDayHeader(DateTime dayDate, bool isToday, bool isSelected, Action onClicked)
+    {
+        var stack = new StackPanel
         {
             Orientation = Orientation.Vertical,
             Spacing = 2,
-            HorizontalAlignment = HorizontalAlignment.Center
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center
         };
-        header.Children.Add(new TextBlock
+
+        stack.Children.Add(new TextBlock
         {
             Text = dayDate.ToString("ddd").ToUpperInvariant(),
             FontSize = 11,
@@ -136,64 +168,135 @@ internal sealed class WeekViewRenderer
             Foreground = new SolidColorBrush(isToday ? Theme.AccentText : Theme.Text3)
         });
 
-        var numberCircle = CalendarRenderHelper.CreateDayNumber(
-            dayDate.Day.ToString(), size: 32, fontSize: 18, out var numberText);
-        numberCircle.HorizontalAlignment = HorizontalAlignment.Center;
-        CalendarRenderHelper.ApplyDayNumberVisuals(numberCircle, numberText, isSelected, isToday);
-        _dayNumberCircles[dayKey] = numberCircle;
-        _dayNumberBlocks[dayKey] = numberText;
-        header.Children.Add(numberCircle);
+        var circle = CalendarRenderHelper.CreateDayNumber(
+            dayDate.Day.ToString(), size: 32, fontSize: 16, out var numberText);
+        circle.HorizontalAlignment = HorizontalAlignment.Center;
+        CalendarRenderHelper.ApplyDayNumberVisuals(circle, numberText, isSelected, isToday);
+        stack.Children.Add(circle);
 
-        stackPanel.Children.Add(header);
-
-        if (eventsByDate.TryGetValue(dayKey, out var events))
-            stackPanel.Children.Add(CreateEventList(events, calendars, onEventClicked));
-
-        // Single tap selects the day; double tap creates an event for it.
-        border.Tapped += (s, e) => onDaySelected(dayDate);
-        border.DoubleTapped += (s, e) => onDayActivated(dayDate);
-
-        border.Child = stackPanel;
+        var border = new Border
+        {
+            Child = stack,
+            Padding = new Thickness(4, 8, 4, 8),
+            BorderBrush = new SolidColorBrush(Theme.Hairline2),
+            // Left divider separates adjacent headers; bottom rule separates headers from timelines.
+            BorderThickness = new Thickness(1, 0, 0, 1)
+        };
+        border.Tapped += (s, e) => onClicked();
         return border;
     }
 
-    private void ApplyColumnVisuals(DateTime dayDate)
-    {
-        var dayKey = DateHelpers.GetLocalDayKey(dayDate);
-        bool isSelected = DateHelpers.IsSameDay(dayDate, _selectedDate);
-        bool isToday = DateHelpers.IsSameDay(dayDate, DateHelpers.GetLocalDayKey(DateTime.Now));
-
-        if (_dayColumns.TryGetValue(dayKey, out var column))
-            CalendarRenderHelper.ApplyDayContainerVisuals(column, isSelected);
-
-        if (_dayNumberCircles.TryGetValue(dayKey, out var circle)
-            && _dayNumberBlocks.TryGetValue(dayKey, out var text))
-            CalendarRenderHelper.ApplyDayNumberVisuals(circle, text, isSelected, isToday);
-    }
+    // ── All-day band ──────────────────────────────────────────────────────
 
     /// <summary>
-    /// Builds a scrollable list of event-pill chips for one day column. Each
-    /// chip shows the start time (or "All day") and title; chip visuals and tap
-    /// handling come from <see cref="CalendarRenderHelper.CreateEventChip"/>.
+    /// Builds a 7-column all-day events band aligned with the timeline gutter
+    /// and day columns below. Returns null if no day in the week has all-day
+    /// events (callers skip adding it to the top section entirely).
     /// </summary>
-    private static UIElement CreateEventList(
-        List<Event> events, List<Calendar> calendars, Action<Event, FrameworkElement> onEventClicked)
+    private static Border? BuildAllDayBand(
+        IReadOnlyList<DateTime> weekDays,
+        Dictionary<DateTime, List<Event>> eventsByDate,
+        List<Calendar> calendars,
+        Action<Event, FrameworkElement> onEventClicked)
     {
-        var scrollViewer = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+        var allDayPerDay = weekDays.Select(d =>
+            (eventsByDate.GetValueOrDefault(DateHelpers.GetLocalDayKey(d)) ?? new List<Event>())
+            .Where(e => e.IsAllDay).ToList()).ToList();
 
-        var eventsPanel = new StackPanel { Orientation = Orientation.Vertical, Spacing = 4 };
+        if (!allDayPerDay.Any(list => list.Count > 0))
+            return null;
 
-        foreach (var evt in events)
+        var grid = new Grid();
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(TimelineRenderHelper.GutterWidth) });
+        foreach (var _ in weekDays)
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+        var gutterLabel = new TextBlock
         {
-            var timeText = evt.IsAllDay
-                ? "All day"
-                : evt.StartTimeUtc.ToLocalTime().ToString("h:mm tt");
+            Text = "all-day",
+            FontSize = 10,
+            Foreground = new SolidColorBrush(Theme.Text3),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(0, 4, 8, 0)
+        };
+        Grid.SetColumn(gutterLabel, 0);
+        grid.Children.Add(gutterLabel);
 
-            eventsPanel.Children.Add(CalendarRenderHelper.CreateEventChip(
-                evt, calendars, $"{timeText}  {evt.Title}", onEventClicked));
+        for (int i = 0; i < allDayPerDay.Count; i++)
+        {
+            var events = allDayPerDay[i];
+            if (events.Count == 0) continue;
+
+            var chips = new StackPanel
+            {
+                Orientation = Orientation.Vertical,
+                Spacing = 2,
+                Margin = new Thickness(1, 2, 1, 2)
+            };
+            foreach (var evt in events)
+                chips.Children.Add(CalendarRenderHelper.CreateEventChip(evt, calendars, evt.Title, onEventClicked));
+
+            Grid.SetColumn(chips, i + 1);
+            grid.Children.Add(chips);
         }
 
-        scrollViewer.Content = eventsPanel;
-        return scrollViewer;
+        return new Border
+        {
+            Child = grid,
+            Padding = new Thickness(0, 2, 0, 4),
+            BorderBrush = new SolidColorBrush(Theme.Hairline2),
+            BorderThickness = new Thickness(0, 0, 0, 1)
+        };
+    }
+
+    // ── 7-column timeline grid ────────────────────────────────────────────
+
+    private static Grid BuildTimelinesGrid(
+        IReadOnlyList<DateTime> weekDays,
+        Dictionary<DateTime, List<Event>> eventsByDate,
+        List<Calendar> calendars,
+        Action<DateTime, TimeSpan> onTimeSlotActivated,
+        Action<Event, FrameworkElement> onEventClicked)
+    {
+        var grid = new Grid { Height = TimelineRenderHelper.TotalHeight };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(TimelineRenderHelper.GutterWidth) });
+        for (int i = 0; i < weekDays.Count; i++)
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+        // Single shared gutter on the far left (aligns with the header gutter spacer).
+        var gutter = TimelineRenderHelper.BuildSharedGutter();
+        Grid.SetColumn(gutter, 0);
+        grid.Children.Add(gutter);
+
+        // One day-content column per day; each handles its own overlap packing.
+        for (int i = 0; i < weekDays.Count; i++)
+        {
+            var dayDate = weekDays[i];
+            var dayKey = DateHelpers.GetLocalDayKey(dayDate);
+            var timedEvents = (eventsByDate.GetValueOrDefault(dayKey) ?? new List<Event>())
+                .Where(e => !e.IsAllDay).ToList();
+
+            var capturedDate = dayDate;
+            var dayContent = TimelineRenderHelper.BuildDayColumnContent(
+                dayDate,
+                timedEvents,
+                calendars,
+                TimeZoneInfo.Local,
+                onEventClicked,
+                time => onTimeSlotActivated(capturedDate, time));
+
+            // Border wrapper supplies the 1px left hairline divider between columns.
+            var wrapper = new Border
+            {
+                Child = dayContent,
+                BorderBrush = new SolidColorBrush(Theme.Hairline2),
+                BorderThickness = new Thickness(1, 0, 0, 0)
+            };
+            Grid.SetColumn(wrapper, i + 1);
+            grid.Children.Add(wrapper);
+        }
+
+        return grid;
     }
 }

@@ -83,17 +83,25 @@ Mini-month header arrows:
 
 Main grid day selection (Month view):
 
-- A single tap on an in-month day calls `SelectDate`.
-- A double tap on an in-month day calls `OnDayActivated`, which calls
-  `SelectDate` and opens the create-event dialog for that day.
+- A tap on an in-month day's number badge calls `SelectDate` (the tap is
+  marked handled so it does not bubble to the cell).
+- A tap on the rest of an in-month cell's empty space calls `OnDayActivated`,
+  which calls `SelectDate` and opens `EventEditPopover` for that day (defaulting
+  to a 9am start). Tap-to-create is now the uniform gesture across Month, Week,
+  and Day views — there is no double-tap path anywhere.
 
-Week view day selection:
+Week view day selection and time-slot interaction:
 
-- Each day column reports the same `SelectDate` (single tap) and
-  `OnDayActivated` (double tap) callbacks as the month grid — Week View is
-  just another consumer of the selection model.
-- Selecting a day already in the visible week uses the incremental path.
-  Selecting a day in a different week (e.g. from the mini month) re-anchors
+- Tapping a day header calls `SelectDate` — Week View is a consumer of the
+  same selection model as Month View.
+- Tapping an empty timeline slot calls `OnTimeSlotActivated(day, hour)`, which
+  selects the day and opens `EventEditPopover` pre-filled with that day and
+  start hour. The same callback is shared with Day View.
+- Selecting a day already in the visible week uses the incremental path; the
+  week view is fully re-rendered to update the selected day-header highlight
+  (the new renderer has no `UpdateSelectedDate` — rebuilding is cheap and
+  keeps the renderer stateless).
+- Selecting a day in a different week (e.g. from the mini month) re-anchors
   `_displayMonth` and calls `RefreshActiveViewAsync`, because the visible seven
   days and the loaded range change.
 
@@ -103,12 +111,21 @@ Day view:
   24-hour timeline, with timed events positioned by start/end (overlapping
   events packed into side-by-side columns) and a current-time indicator on
   today. It reads the day's events from the shared `_eventsByDate`.
-- Clicking an event opens the same popover (`ShowEventPopover`). Double-clicking
-  an empty time slot calls `OnDayTimeActivated`, which opens the create-event
-  dialog pre-filled with the selected day and the slot's start hour.
+- Clicking an event opens the read-only popover (`ShowEventPopover`); the
+  popover's Edit button opens `EventEditPopover`. Tapping an empty time slot
+  calls the shared `OnTimeSlotActivated(_selectedDate, hour)`, which opens
+  `EventEditPopover` pre-filled with the selected day and the slot's start hour.
 - Because Day View's loaded range is a single day, any `SelectDate` to a
   different day re-anchors `_displayMonth` and calls `RefreshActiveViewAsync`
   (the single-day cache never covers another day).
+
+Event editing:
+
+- Tapping an event chip (any view) or a selected-day panel row opens
+  `ShowEventPopover` (read-only). Its Edit button forwards to `EventEditPopover`
+  via the host, which on save updates the event and refreshes the active view.
+- All event create/edit flows go through `EventEditPopover` (light-dismiss
+  flyout). Calendars still use modal dialogs via `CalendarDialogService`.
 
 Calendar/sidebar changes:
 

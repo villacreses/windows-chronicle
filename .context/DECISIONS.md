@@ -80,7 +80,7 @@ reason about.
 Decision:
 
 Extract cohesive rendering/dialog responsibilities into small focused
-classes (`CalendarGridRenderer`, `SidebarRenderer`, `EventDialogService`,
+classes (`CalendarGridRenderer`, `SidebarRenderer`, `CalendarDialogService`,
 plus `DateHelpers`/`ColorHelper`), instantiated directly by MainWindow.
 MainWindow remains a coordinator: state ownership, event handlers, and
 refresh orchestration.

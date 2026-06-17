@@ -11,6 +11,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using Windows.Foundation;
 
 namespace Chronicle
 {
@@ -28,7 +29,6 @@ namespace Chronicle
         private readonly SelectedDayRenderer _selectedDayRenderer;
         private readonly WeekViewRenderer _weekViewRenderer;
         private readonly DayViewRenderer _dayViewRenderer;
-        private readonly EventDialogService _eventDialogService;
         private readonly CalendarDialogService _calendarDialogService;
 
         private readonly EventPopover _eventPopover;
@@ -69,8 +69,6 @@ namespace Chronicle
             _selectedDayRenderer = new SelectedDayRenderer(SelectedDayPanel);
             _weekViewRenderer = new WeekViewRenderer(WeekViewRoot);
             _dayViewRenderer = new DayViewRenderer(DayViewRoot);
-            _eventDialogService = new EventDialogService(
-                _eventRepository, _calendarRepository, () => Content.XamlRoot, RefreshActiveViewAsync);
             _calendarDialogService = new CalendarDialogService(
                 _calendarRepository, _eventRepository, () => Content.XamlRoot, ReloadCalendarsAndRefreshAsync);
 
@@ -400,7 +398,10 @@ namespace Chronicle
 
             _miniMonthRenderer.UpdateSelectedDate(previousDate, _selectedDate);
             _calendarGridRenderer.UpdateSelectedDate(previousDate, _selectedDate);
-            _weekViewRenderer.UpdateSelectedDate(previousDate, _selectedDate);
+            // Week view has no incremental update path — re-render to refresh
+            // the selected day header highlight.
+            if (_currentView == CalendarView.Week)
+                RenderWeekView();
             RenderSelectedDay();
         }
 
@@ -414,7 +415,154 @@ namespace Chronicle
 
         private async void OnSelectedDayEventClicked(Event evt)
         {
-            await _eventDialogService.ShowEditEventDialogAsync(evt);
+            await EditEventAsync(evt);
+        }
+
+        // ── Event create / edit popovers ──────────────────────────────────────
+
+        /// <summary>
+        /// Window-center anchor for the event popovers. Positions are relative to
+        /// the window content. A precise per-interaction anchor can replace this
+        /// later; centering is good enough and keeps callbacks simple.
+        /// </summary>
+        private Point WindowCenterAnchor()
+            => Content is FrameworkElement root
+                ? new Point(root.ActualWidth / 2, root.ActualHeight / 2)
+                : new Point(0, 0);
+
+        /// <summary>
+        /// Opens the create-event popover for <paramref name="dayDate"/> at
+        /// <paramref name="suggestedStartLocal"/>; on save, inserts the event and
+        /// refreshes the active view. No-op if dismissed or no calendar exists.
+        ///
+        /// Shows a transient "(No title)" draft chip in the active view for the
+        /// duration of the popover so the user has immediate visual feedback at
+        /// the tap location. The draft is removed in <c>finally</c> — never
+        /// persisted — and the view either refreshes from the DB (on save) or
+        /// re-renders without the draft (on cancel/dismiss).
+        /// </summary>
+        private async Task CreateEventAsync(DateTime dayDate, DateTime suggestedStartLocal)
+        {
+            if (_allCalendars.Count == 0)
+                return;
+
+            var draft = BuildDraftEvent(suggestedStartLocal);
+            InsertDraft(draft);
+            RerenderActiveView();
+
+            Event? created;
+            try
+            {
+                created = await EventEditPopover.ShowCreateEventAsync(
+                    this, WindowCenterAnchor(), suggestedStartLocal, _allCalendars);
+            }
+            finally
+            {
+                RemoveDraft(draft);
+            }
+
+            if (created is not null)
+            {
+                await _eventRepository.InsertAsync(created);
+                await RefreshActiveViewAsync();
+            }
+            else
+            {
+                RerenderActiveView();
+            }
+        }
+
+        // ── Draft event (transient placeholder while the popover is open) ─────
+
+        private const string DraftEventTitle = "(No title)";
+
+        /// <summary>
+        /// Builds a one-hour transient placeholder event starting at
+        /// <paramref name="startLocal"/>, owned by the first available calendar
+        /// (matching the popover's default). Never saved to the repository.
+        /// </summary>
+        private Event BuildDraftEvent(DateTime startLocal)
+        {
+            var startUtc = DateTime.SpecifyKind(startLocal, DateTimeKind.Local).ToUniversalTime();
+            var nowUtc = DateTime.UtcNow;
+            return new Event
+            {
+                Id = Guid.NewGuid(),
+                CalendarId = _allCalendars[0].Id,
+                Title = DraftEventTitle,
+                StartTimeUtc = startUtc,
+                EndTimeUtc = startUtc.AddHours(1),
+                IsAllDay = false,
+                Description = null,
+                RecurrenceRuleJson = null,
+                CreatedAtUtc = nowUtc,
+                UpdatedAtUtc = nowUtc
+            };
+        }
+
+        /// <summary>
+        /// Inserts the draft into <see cref="_eventsByDate"/> at the front of its
+        /// day's list, so Month View renders it at the top of the cell. Week and
+        /// Day Views position by the draft's start time, which lands the chip at
+        /// the tap location.
+        /// </summary>
+        private void InsertDraft(Event draft)
+        {
+            var key = DateHelpers.GetEventDayKey(draft.StartTimeUtc);
+            if (!_eventsByDate.TryGetValue(key, out var list))
+            {
+                list = new List<Event>();
+                _eventsByDate[key] = list;
+            }
+            list.Insert(0, draft);
+        }
+
+        private void RemoveDraft(Event draft)
+        {
+            var key = DateHelpers.GetEventDayKey(draft.StartTimeUtc);
+            if (_eventsByDate.TryGetValue(key, out var list))
+            {
+                list.Remove(draft);
+                if (list.Count == 0)
+                    _eventsByDate.Remove(key);
+            }
+        }
+
+        /// <summary>
+        /// Re-renders just the active main view and the selected-day panel from
+        /// the current <see cref="_eventsByDate"/> (no DB reload). Used to show
+        /// and then hide the draft chip without round-tripping the repository.
+        /// </summary>
+        private void RerenderActiveView()
+        {
+            switch (_currentView)
+            {
+                case CalendarView.Month:
+                    RenderCalendarGrid();
+                    break;
+                case CalendarView.Week:
+                    RenderWeekView();
+                    break;
+                case CalendarView.Day:
+                    RenderDayView();
+                    break;
+            }
+            RenderSelectedDay();
+        }
+
+        /// <summary>
+        /// Opens the edit-event popover for <paramref name="evt"/>; on save,
+        /// updates the event and refreshes the active view. No-op if dismissed.
+        /// </summary>
+        private async Task EditEventAsync(Event evt)
+        {
+            var edited = await EventEditPopover.ShowEditEventAsync(
+                this, WindowCenterAnchor(), evt, _allCalendars);
+            if (edited is null)
+                return;
+
+            await _eventRepository.UpdateAsync(edited);
+            await RefreshActiveViewAsync();
         }
 
         // ── Event loading ─────────────────────────────────────────────────────
@@ -454,7 +602,7 @@ namespace Chronicle
                 _eventsByDate,
                 _allCalendars,
                 onDaySelected: SelectDate,
-                onDayActivated: OnDayActivated,
+                onCreateOnDay: OnDayActivated,
                 onEventClicked: ShowEventPopover);
         }
 
@@ -466,18 +614,31 @@ namespace Chronicle
                 _selectedDate,
                 _eventsByDate,
                 _allCalendars,
+                showAllDayBand: true,
                 onDaySelected: SelectDate,
-                onDayActivated: OnDayActivated,
+                onTimeSlotActivated: OnTimeSlotActivated,
                 onEventClicked: ShowEventPopover);
         }
 
         /// <summary>
-        /// Double-tapping a day selects it and opens the create-event dialog.
+        /// Tapping an empty time slot in Week or Day View selects the day and
+        /// opens the create-event popover pre-filled with the slot's start hour.
+        /// </summary>
+        private async void OnTimeSlotActivated(DateTime dayDate, TimeSpan startTime)
+        {
+            SelectDate(dayDate);
+            await CreateEventAsync(dayDate, dayDate.Date + startTime);
+        }
+
+        /// <summary>
+        /// Tapping empty space in a Month View day cell selects the day and
+        /// opens the create-event popover (defaulting to a 9am start). Tapping
+        /// the day-number badge selects without creating.
         /// </summary>
         private async void OnDayActivated(DateTime dayDate)
         {
             SelectDate(dayDate);
-            await _eventDialogService.ShowCreateEventDialogAsync(dayDate);
+            await CreateEventAsync(dayDate, dayDate.Date.AddHours(9));
         }
 
         // ── Day view rendering ────────────────────────────────────────────────
@@ -491,16 +652,7 @@ namespace Chronicle
                 events,
                 _allCalendars,
                 onEventClicked: ShowEventPopover,
-                onCreateAt: OnDayTimeActivated);
-        }
-
-        /// <summary>
-        /// Double-tapping an empty time slot in Day View opens the create-event
-        /// dialog for the selected day, pre-filled with the slot's start hour.
-        /// </summary>
-        private async void OnDayTimeActivated(TimeSpan startTime)
-        {
-            await _eventDialogService.ShowCreateEventDialogAsync(_selectedDate, startTime);
+                onTimeSlotActivated: OnTimeSlotActivated);
         }
 
         // ── Event popover ─────────────────────────────────────────────────────
@@ -521,7 +673,7 @@ namespace Chronicle
         private async void EventPopover_EditRequested(object? sender, Event evt)
         {
             _eventPopoverFlyout.Hide();
-            await _eventDialogService.ShowEditEventDialogAsync(evt);
+            await EditEventAsync(evt);
         }
 
         private async void EventPopover_DeleteRequested(object? sender, Event evt)

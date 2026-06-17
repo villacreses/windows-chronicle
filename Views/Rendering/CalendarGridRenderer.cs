@@ -24,8 +24,9 @@ namespace Chronicle.Views.Rendering;
 ///   <item>Distinguishes in-month from out-of-month cells, highlights today
 ///   (accent-filled badge) and the selected day (soft tint + accent ring), and
 ///   exposes <see cref="UpdateSelectedDate"/> for incremental selection.</item>
-///   <item>Reports day selection, day activation, and event clicks back to the
-///   caller via callbacks; it owns no navigation or event state.</item>
+///   <item>Reports day selection (tap on the day-number badge), create-on-day
+///   (tap on empty cell space), and event clicks back to the caller via
+///   callbacks; it owns no navigation or event state.</item>
 /// </list>
 ///
 /// Shared day-cell and chip visuals come from <see cref="CalendarRenderHelper"/>;
@@ -74,9 +75,10 @@ internal sealed class CalendarGridRenderer
 
     /// <summary>
     /// Renders the month grid for <paramref name="displayMonth"/>.
-    /// <paramref name="onDaySelected"/> fires on a single tap of an in-month
-    /// cell (selects the day). <paramref name="onDayActivated"/> fires on a
-    /// double tap (creates an event for that day).
+    /// <paramref name="onDaySelected"/> fires on a tap of the day number badge
+    /// (selects the day). <paramref name="onCreateOnDay"/> fires on a tap of an
+    /// in-month cell's empty area (creates an event for that day; the host
+    /// typically also selects it).
     /// <paramref name="onEventClicked"/> fires when an event chip is pressed,
     /// passing the event and the chip element to anchor a popover to.
     /// </summary>
@@ -86,7 +88,7 @@ internal sealed class CalendarGridRenderer
         Dictionary<DateTime, List<Event>> eventsByDate,
         List<Calendar> calendars,
         Action<DateTime> onDaySelected,
-        Action<DateTime> onDayActivated,
+        Action<DateTime> onCreateOnDay,
         Action<Event, FrameworkElement> onEventClicked)
     {
         _displayMonth = DateHelpers.GetLocalDayKey(displayMonth);
@@ -120,7 +122,7 @@ internal sealed class CalendarGridRenderer
             var cell = CreateDayCell(
                 cellDate, isInMonth,
                 isToday: DateHelpers.IsSameDay(cellDate, today),
-                eventsByDate, calendars, onDaySelected, onDayActivated, onEventClicked);
+                eventsByDate, calendars, onDaySelected, onCreateOnDay, onEventClicked);
             var dayKey = DateHelpers.GetLocalDayKey(cellDate);
             _dayCells[dayKey] = cell;
             Grid.SetRow(cell, cellIndex / 7);
@@ -145,7 +147,7 @@ internal sealed class CalendarGridRenderer
         Dictionary<DateTime, List<Event>> eventsByDate,
         List<Calendar> calendars,
         Action<DateTime> onDaySelected,
-        Action<DateTime> onDayActivated,
+        Action<DateTime> onCreateOnDay,
         Action<Event, FrameworkElement> onEventClicked)
     {
         var dayKey = DateHelpers.GetLocalDayKey(cellDate);
@@ -191,9 +193,16 @@ internal sealed class CalendarGridRenderer
                     eventsArea, eventsHost, events, calendars, cellDate, onEventClicked, onDaySelected);
             }
 
-            // Single tap selects the day; double tap creates an event.
-            border.Tapped += (s, e) => onDaySelected(cellDate);
-            border.DoubleTapped += (s, e) => onDayActivated(cellDate);
+            // Tap on the day-number badge selects (marked handled so it does NOT
+            // bubble to the cell and create an event). Tap anywhere else in the
+            // cell creates an event for that day; chips/overflow mark their
+            // taps handled, so this only fires on empty cell space.
+            numberCircle.Tapped += (s, e) =>
+            {
+                e.Handled = true;
+                onDaySelected(cellDate);
+            };
+            border.Tapped += (s, e) => onCreateOnDay(cellDate);
         }
 
         border.Child = content;

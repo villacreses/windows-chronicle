@@ -10,9 +10,8 @@ namespace Chronicle.Views.Popovers;
 /// <summary>
 /// Lightweight read-only summary card for a single event, shown inside a
 /// <see cref="Microsoft.UI.Xaml.Controls.Flyout"/> anchored to the clicked
-/// event chip. Offers "Edit" (opens the full edit dialog via
-/// <see cref="Chronicle.Views.Dialogs.EventDialogService"/>) and "Delete"
-/// (two-step confirmation, mirroring the edit dialog's delete flow).
+/// event chip. Offers "Edit" (opens the full edit popover via
+/// <see cref="EventEditPopover"/>) and "Delete" (two-step confirmation).
 /// </summary>
 public sealed partial class EventPopover : UserControl
 {
@@ -88,7 +87,7 @@ public sealed partial class EventPopover : UserControl
         if (_currentEvent is null)
             return;
 
-        // Two-step confirmation, mirroring EventDialogService's delete flow.
+        // Two-step confirmation before delete.
         if (!_deleteConfirmationRequested)
         {
             _deleteConfirmationRequested = true;
