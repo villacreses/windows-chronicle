@@ -25,9 +25,8 @@ namespace Chronicle.Views.Rendering;
 ///   <see cref="TimelineRenderHelper.BuildDayColumnContent"/>; the shared gutter
 ///   comes from <see cref="TimelineRenderHelper.BuildSharedGutter"/>. Each
 ///   day's overlap packing is independent.</item>
-///   <item>Reports day-header taps (<c>onDaySelected</c>), empty time-slot
-///   double-taps (<c>onTimeSlotActivated</c>), and event taps
-///   (<c>onEventClicked</c>) back to the caller via callbacks.</item>
+///   <item>Reports day-header taps, empty time-slot taps, and event taps
+///   back to the host via <see cref="ICalendarInteractionHost"/>.</item>
 /// </list>
 ///
 /// Colors from <see cref="Theme"/>; shared visuals from
@@ -37,10 +36,17 @@ namespace Chronicle.Views.Rendering;
 internal sealed class WeekViewRenderer
 {
     private readonly Grid _host;
+    private readonly ICalendarInteractionHost _interactions;
+    // Cached method-group conversion of _interactions.OnEventClicked, passed
+    // to CalendarRenderHelper.CreateEventChip and TimelineRenderHelper without
+    // allocating a delegate per event chip. Per the Idle Cost Budget.
+    private readonly Action<Event, FrameworkElement> _onEventClicked;
 
-    public WeekViewRenderer(Grid host)
+    public WeekViewRenderer(Grid host, ICalendarInteractionHost interactions)
     {
         _host = host;
+        _interactions = interactions;
+        _onEventClicked = interactions.OnEventClicked;
     }
 
     /// <summary>
@@ -49,20 +55,14 @@ internal sealed class WeekViewRenderer
     /// <paramref name="showAllDayBand"/> controls whether all-day events are
     /// shown in a band above the timelines (the band is omitted entirely when
     /// no day in the week has all-day events, regardless of this flag).
-    /// <paramref name="onDaySelected"/> fires when a day header is tapped.
-    /// <paramref name="onTimeSlotActivated"/> fires when an empty timeline slot
-    /// is double-tapped (day and start hour are provided).
-    /// <paramref name="onEventClicked"/> fires when a timed or all-day event
-    /// block is tapped (used to anchor the read-only popover).
+    /// Day-header taps, empty-slot taps, and event taps all route through
+    /// <see cref="ICalendarInteractionHost"/>.
     /// </summary>
     public void Render(
         DateTime selectedDate,
         Dictionary<DateTime, List<Event>> eventsByDate,
         List<Calendar> calendars,
-        bool showAllDayBand,
-        Action<DateTime> onDaySelected,
-        Action<DateTime, TimeSpan> onTimeSlotActivated,
-        Action<Event, FrameworkElement> onEventClicked)
+        bool showAllDayBand)
     {
         _host.Children.Clear();
         _host.ColumnDefinitions.Clear();
@@ -76,10 +76,10 @@ internal sealed class WeekViewRenderer
 
         // Row 0: sticky top section — day headers + optional all-day band.
         var topSection = new StackPanel { Orientation = Orientation.Vertical };
-        topSection.Children.Add(BuildDayHeaders(weekDays, today, selKey, onDaySelected));
+        topSection.Children.Add(BuildDayHeaders(weekDays, today, selKey, _interactions));
         if (showAllDayBand)
         {
-            var allDayBand = BuildAllDayBand(weekDays, eventsByDate, calendars, onEventClicked);
+            var allDayBand = BuildAllDayBand(weekDays, eventsByDate, calendars, _onEventClicked);
             if (allDayBand is not null)
                 topSection.Children.Add(allDayBand);
         }
@@ -87,7 +87,7 @@ internal sealed class WeekViewRenderer
         _host.Children.Add(topSection);
 
         // Row 1: scrollable 7-column timeline.
-        var timelinesGrid = BuildTimelinesGrid(weekDays, eventsByDate, calendars, onTimeSlotActivated, onEventClicked);
+        var timelinesGrid = BuildTimelinesGrid(weekDays, eventsByDate, calendars, _interactions, _onEventClicked);
 
         // Auto-scroll to ~7am, or earlier if the first timed event across the
         // whole week starts before then.
@@ -119,7 +119,7 @@ internal sealed class WeekViewRenderer
         IReadOnlyList<DateTime> weekDays,
         DateTime today,
         DateTime selKey,
-        Action<DateTime> onDaySelected)
+        ICalendarInteractionHost interactions)
     {
         var grid = new Grid { Height = 56 };
         // Gutter placeholder keeps headers aligned with the timeline columns below.
@@ -142,7 +142,7 @@ internal sealed class WeekViewRenderer
             bool isSelected = DateHelpers.IsSameDay(dayDate, selKey);
             var captured = dayDate;
 
-            var header = BuildDayHeader(dayDate, isToday, isSelected, () => onDaySelected(captured));
+            var header = BuildDayHeader(dayDate, isToday, isSelected, () => interactions.OnDaySelected(captured));
             Grid.SetColumn(header, i + 1);
             grid.Children.Add(header);
         }
@@ -256,7 +256,7 @@ internal sealed class WeekViewRenderer
         IReadOnlyList<DateTime> weekDays,
         Dictionary<DateTime, List<Event>> eventsByDate,
         List<Calendar> calendars,
-        Action<DateTime, TimeSpan> onTimeSlotActivated,
+        ICalendarInteractionHost interactions,
         Action<Event, FrameworkElement> onEventClicked)
     {
         var grid = new Grid { Height = TimelineRenderHelper.TotalHeight };
@@ -284,7 +284,7 @@ internal sealed class WeekViewRenderer
                 calendars,
                 TimeZoneInfo.Local,
                 onEventClicked,
-                time => onTimeSlotActivated(capturedDate, time));
+                time => interactions.OnTimeSlotCreateRequested(capturedDate, time));
 
             // Border wrapper supplies the 1px left hairline divider between columns.
             var wrapper = new Border

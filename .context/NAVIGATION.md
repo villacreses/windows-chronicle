@@ -85,7 +85,7 @@ Main grid day selection (Month view):
 
 - A tap on an in-month day's number badge calls `SelectDate` (the tap is
   marked handled so it does not bubble to the cell).
-- A tap on the rest of an in-month cell's empty space calls `OnDayActivated`,
+- A tap on the rest of an in-month cell's empty space calls `OnDayCreateRequested`,
   which calls `SelectDate` and opens `EventEditPopover` for that day (defaulting
   to a 9am start). Tap-to-create is now the uniform gesture across Month, Week,
   and Day views — there is no double-tap path anywhere.
@@ -94,7 +94,7 @@ Week view day selection and time-slot interaction:
 
 - Tapping a day header calls `SelectDate` — Week View is a consumer of the
   same selection model as Month View.
-- Tapping an empty timeline slot calls `OnTimeSlotActivated(day, hour)`, which
+- Tapping an empty timeline slot calls `OnTimeSlotCreateRequested(day, hour)`, which
   selects the day and opens `EventEditPopover` pre-filled with that day and
   start hour. The same callback is shared with Day View.
 - Selecting a day already in the visible week uses the incremental path; the
@@ -111,9 +111,9 @@ Day view:
   24-hour timeline, with timed events positioned by start/end (overlapping
   events packed into side-by-side columns) and a current-time indicator on
   today. It reads the day's events from the shared `_eventsByDate`.
-- Clicking an event opens the read-only popover (`ShowEventPopover`); the
+- Clicking an event opens the read-only popover (`OnEventClicked`); the
   popover's Edit button opens `EventEditPopover`. Tapping an empty time slot
-  calls the shared `OnTimeSlotActivated(_selectedDate, hour)`, which opens
+  calls the shared `OnTimeSlotCreateRequested(_selectedDate, hour)`, which opens
   `EventEditPopover` pre-filled with the selected day and the slot's start hour.
 - Because Day View's loaded range is a single day, any `SelectDate` to a
   different day re-anchors `_displayMonth` and calls `RefreshActiveViewAsync`
@@ -122,7 +122,7 @@ Day view:
 Event editing:
 
 - Tapping an event chip (any view) or a selected-day panel row opens
-  `ShowEventPopover` (read-only). Its Edit button forwards to `EventEditPopover`
+  `OnEventClicked` (read-only). Its Edit button forwards to `EventEditPopover`
   via the host, which on save updates the event and refreshes the active view.
 - All event create/edit flows go through `EventEditPopover` (light-dismiss
   flyout). Calendars still use modal dialogs via `CalendarDialogService`.

@@ -29,41 +29,36 @@ internal sealed class MiniMonthRenderer
     private static readonly Windows.UI.Color SelectedText = Theme.OnAccent;
 
     private readonly StackPanel _container;
+    private readonly ICalendarInteractionHost _interactions;
     private readonly Dictionary<DateTime, Button> _dayButtons = new();
 
     private DateTime _displayMonth;
     private DateTime _selectedDate;
     private DateTime? _pendingFocusDate;
-    private Action<DateTime>? _onDateSelected;
 
-    public MiniMonthRenderer(StackPanel container)
+    public MiniMonthRenderer(StackPanel container, ICalendarInteractionHost interactions)
     {
         _container = container;
+        _interactions = interactions;
     }
 
     /// <summary>
     /// Renders the mini month for <paramref name="displayMonth"/>, highlighting
-    /// today and <paramref name="selectedDate"/>.
-    /// <paramref name="onDateSelected"/> fires with the clicked day's date.
-    /// <paramref name="onPrevMonth"/>/<paramref name="onNextMonth"/> fire when
-    /// the header arrows are pressed.
+    /// today and <paramref name="selectedDate"/>. Day taps and the prev/next
+    /// arrows route through <see cref="ICalendarInteractionHost"/>
+    /// (<c>OnMiniMonthDateSelected</c>, <c>OnMiniMonthPrevMonth</c>,
+    /// <c>OnMiniMonthNextMonth</c>).
     /// </summary>
-    public void Render(
-        DateTime displayMonth,
-        DateTime selectedDate,
-        Action<DateTime> onDateSelected,
-        Action onPrevMonth,
-        Action onNextMonth)
+    public void Render(DateTime displayMonth, DateTime selectedDate)
     {
         _displayMonth = DateHelpers.GetLocalDayKey(displayMonth);
         _selectedDate = DateHelpers.GetLocalDayKey(selectedDate);
-        _onDateSelected = onDateSelected;
         _dayButtons.Clear();
 
         _container.Children.Clear();
-        _container.Children.Add(BuildHeader(displayMonth, onPrevMonth, onNextMonth));
+        _container.Children.Add(BuildHeader(displayMonth, _interactions));
         _container.Children.Add(BuildDayOfWeekRow());
-        _container.Children.Add(BuildDayGrid(displayMonth, selectedDate, onDateSelected));
+        _container.Children.Add(BuildDayGrid(displayMonth, selectedDate));
         FocusPendingDay();
     }
 
@@ -82,14 +77,14 @@ internal sealed class MiniMonthRenderer
         FocusPendingDay();
     }
 
-    private static Grid BuildHeader(DateTime displayMonth, Action onPrevMonth, Action onNextMonth)
+    private static Grid BuildHeader(DateTime displayMonth, ICalendarInteractionHost interactions)
     {
         var header = new Grid();
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-        var prev = BuildArrowButton(ChevronLeftGlyph, onPrevMonth);
+        var prev = BuildArrowButton(ChevronLeftGlyph, interactions.OnMiniMonthPrevMonth);
         Grid.SetColumn(prev, 0);
         header.Children.Add(prev);
 
@@ -104,7 +99,7 @@ internal sealed class MiniMonthRenderer
         Grid.SetColumn(label, 1);
         header.Children.Add(label);
 
-        var next = BuildArrowButton(ChevronRightGlyph, onNextMonth);
+        var next = BuildArrowButton(ChevronRightGlyph, interactions.OnMiniMonthNextMonth);
         Grid.SetColumn(next, 2);
         header.Children.Add(next);
 
@@ -153,8 +148,7 @@ internal sealed class MiniMonthRenderer
         return row;
     }
 
-    private Grid BuildDayGrid(
-        DateTime displayMonth, DateTime selectedDate, Action<DateTime> onDateSelected)
+    private Grid BuildDayGrid(DateTime displayMonth, DateTime selectedDate)
     {
         var grid = new Grid();
         for (int i = 0; i < 7; i++)
@@ -173,8 +167,7 @@ internal sealed class MiniMonthRenderer
                 cellDate,
                 isInMonth: DateHelpers.IsInMonth(cellDate, displayMonth),
                 isToday: DateHelpers.IsSameDay(cellDate, today),
-                isSelected: DateHelpers.IsSameDay(cellDate, selectedDate),
-                onDateSelected);
+                isSelected: DateHelpers.IsSameDay(cellDate, selectedDate));
             _dayButtons[DateHelpers.GetLocalDayKey(cellDate)] = cell;
             Grid.SetRow(cell, cellIndex / 7);
             Grid.SetColumn(cell, cellIndex % 7);
@@ -186,8 +179,7 @@ internal sealed class MiniMonthRenderer
     }
 
     private Button BuildDayCell(
-        DateTime cellDate, bool isInMonth, bool isToday, bool isSelected,
-        Action<DateTime> onDateSelected)
+        DateTime cellDate, bool isInMonth, bool isToday, bool isSelected)
     {
         var button = new Button
         {
@@ -224,7 +216,7 @@ internal sealed class MiniMonthRenderer
             button.Foreground = new SolidColorBrush(isInMonth ? InMonthText : OutOfMonthText);
         }
 
-        button.Click += (s, e) => onDateSelected(cellDate);
+        button.Click += (s, e) => _interactions.OnMiniMonthDateSelected(cellDate);
         button.KeyDown += DayCell_KeyDown;
         return button;
     }
@@ -244,12 +236,12 @@ internal sealed class MiniMonthRenderer
             _ => null
         };
 
-        if (targetDate is null || _onDateSelected is null)
+        if (targetDate is null)
             return;
 
         e.Handled = true;
         _pendingFocusDate = DateHelpers.GetLocalDayKey(targetDate.Value);
-        _onDateSelected(targetDate.Value);
+        _interactions.OnMiniMonthDateSelected(targetDate.Value);
     }
 
     private void ApplyDayCellVisuals(Button button, DateTime cellDate)

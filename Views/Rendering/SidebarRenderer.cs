@@ -24,29 +24,25 @@ internal sealed class SidebarRenderer
     private static readonly Windows.UI.Color PlaceholderText = Theme.Text3;
 
     private readonly StackPanel _sidebarPanel;
+    private readonly ISidebarHost _host;
 
-    public SidebarRenderer(StackPanel sidebarPanel)
+    public SidebarRenderer(StackPanel sidebarPanel, ISidebarHost host)
     {
         _sidebarPanel = sidebarPanel;
+        _host = host;
     }
 
     /// <summary>
     /// Renders the sidebar from the given calendars and visibility map.
-    /// <paramref name="onVisibilityToggled"/> fires with the calendar id and
-    /// new visibility state when a checkbox is toggled.
-    /// <paramref name="onAddCalendar"/>, <paramref name="onEditCalendar"/>,
-    /// and <paramref name="onDeleteCalendar"/> drive calendar management.
+    /// Visibility toggles, the add button, and per-row edit/delete actions
+    /// all route through <see cref="ISidebarHost"/>.
     /// </summary>
     public void Render(
         List<Calendar> calendars,
-        Dictionary<Guid, bool> calendarVisibility,
-        Action<Guid, bool> onVisibilityToggled,
-        Action onAddCalendar,
-        Action<Calendar> onEditCalendar,
-        Action<Calendar> onDeleteCalendar)
+        Dictionary<Guid, bool> calendarVisibility)
     {
         _sidebarPanel.Children.Clear();
-        _sidebarPanel.Children.Add(BuildHeader(onAddCalendar));
+        _sidebarPanel.Children.Add(BuildHeader(_host));
 
         if (calendars.Count == 0)
         {
@@ -62,12 +58,11 @@ internal sealed class SidebarRenderer
 
         foreach (var cal in calendars)
         {
-            _sidebarPanel.Children.Add(BuildCalendarRow(
-                cal, calendarVisibility, onVisibilityToggled, onEditCalendar, onDeleteCalendar));
+            _sidebarPanel.Children.Add(BuildCalendarRow(cal, calendarVisibility, _host));
         }
     }
 
-    private static Grid BuildHeader(Action onAddCalendar)
+    private static Grid BuildHeader(ISidebarHost host)
     {
         var header = new Grid { Margin = new Thickness(0, 0, 0, 8) };
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -99,7 +94,7 @@ internal sealed class SidebarRenderer
             BorderThickness = new Thickness(0)
         };
         ToolTipService.SetToolTip(addButton, "New calendar");
-        addButton.Click += (s, e) => onAddCalendar();
+        addButton.Click += (s, e) => host.OnAddCalendar();
         Grid.SetColumn(addButton, 1);
         header.Children.Add(addButton);
 
@@ -109,9 +104,7 @@ internal sealed class SidebarRenderer
     private static Grid BuildCalendarRow(
         Calendar cal,
         Dictionary<Guid, bool> calendarVisibility,
-        Action<Guid, bool> onVisibilityToggled,
-        Action<Calendar> onEditCalendar,
-        Action<Calendar> onDeleteCalendar)
+        ISidebarHost host)
     {
         var capturedId = cal.Id;
 
@@ -152,31 +145,28 @@ internal sealed class SidebarRenderer
             Padding = new Thickness(4, 6, 4, 6),
             VerticalAlignment = VerticalAlignment.Center
         };
-        checkBox.Checked += (s, e) => onVisibilityToggled(capturedId, true);
-        checkBox.Unchecked += (s, e) => onVisibilityToggled(capturedId, false);
+        checkBox.Checked += (s, e) => host.OnCalendarVisibilityToggled(capturedId, true);
+        checkBox.Unchecked += (s, e) => host.OnCalendarVisibilityToggled(capturedId, false);
         Grid.SetColumn(checkBox, 0);
         row.Children.Add(checkBox);
 
-        var moreButton = BuildOverflowButton(cal, onEditCalendar, onDeleteCalendar);
+        var moreButton = BuildOverflowButton(cal, host);
         Grid.SetColumn(moreButton, 1);
         row.Children.Add(moreButton);
 
         return row;
     }
 
-    private static Button BuildOverflowButton(
-        Calendar cal,
-        Action<Calendar> onEditCalendar,
-        Action<Calendar> onDeleteCalendar)
+    private static Button BuildOverflowButton(Calendar cal, ISidebarHost host)
     {
         var menu = new MenuFlyout();
 
         var editItem = new MenuFlyoutItem { Text = "Edit" };
-        editItem.Click += (s, e) => onEditCalendar(cal);
+        editItem.Click += (s, e) => host.OnEditCalendar(cal);
         menu.Items.Add(editItem);
 
         var deleteItem = new MenuFlyoutItem { Text = "Delete" };
-        deleteItem.Click += (s, e) => onDeleteCalendar(cal);
+        deleteItem.Click += (s, e) => host.OnDeleteCalendar(cal);
         menu.Items.Add(deleteItem);
 
         var button = new Button

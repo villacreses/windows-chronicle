@@ -18,7 +18,7 @@ namespace Chronicle
     /// <summary>The main content view. Pure UI mode — not navigation state.</summary>
     internal enum CalendarView { Month, Week, Day }
 
-    public sealed partial class MainWindow : Window
+    public sealed partial class MainWindow : Window, ICalendarInteractionHost, ISidebarHost
     {
         private readonly EventRepository _eventRepository = new();
         private readonly CalendarRepository _calendarRepository = new();
@@ -63,12 +63,12 @@ namespace Chronicle
             _displayMonth = new DateTime(now.Year, now.Month, 1);
             _selectedDate = DateHelpers.GetLocalDayKey(now);
 
-            _sidebarRenderer = new SidebarRenderer(SidebarPanel);
-            _calendarGridRenderer = new CalendarGridRenderer(DayNamesGrid, CalendarGrid);
-            _miniMonthRenderer = new MiniMonthRenderer(MiniMonthPanel);
-            _selectedDayRenderer = new SelectedDayRenderer(SelectedDayPanel);
-            _weekViewRenderer = new WeekViewRenderer(WeekViewRoot);
-            _dayViewRenderer = new DayViewRenderer(DayViewRoot);
+            _sidebarRenderer = new SidebarRenderer(SidebarPanel, this);
+            _calendarGridRenderer = new CalendarGridRenderer(DayNamesGrid, CalendarGrid, this);
+            _miniMonthRenderer = new MiniMonthRenderer(MiniMonthPanel, this);
+            _selectedDayRenderer = new SelectedDayRenderer(SelectedDayPanel, this);
+            _weekViewRenderer = new WeekViewRenderer(WeekViewRoot, this);
+            _dayViewRenderer = new DayViewRenderer(DayViewRoot, this);
             _calendarDialogService = new CalendarDialogService(
                 _calendarRepository, _eventRepository, () => Content.XamlRoot, ReloadCalendarsAndRefreshAsync);
 
@@ -291,34 +291,28 @@ namespace Chronicle
         /// </summary>
         private void RenderSidebar()
         {
-            _sidebarRenderer.Render(
-                _allCalendars,
-                _calendarVisibility,
-                OnCalendarVisibilityToggled,
-                OnAddCalendar,
-                OnEditCalendar,
-                OnDeleteCalendar);
+            _sidebarRenderer.Render(_allCalendars, _calendarVisibility);
         }
 
-        private async void OnCalendarVisibilityToggled(Guid calendarId, bool isVisible)
+        // ── ISidebarHost ──────────────────────────────────────────────────────
+
+        public async void OnCalendarVisibilityToggled(Guid calendarId, bool isVisible)
         {
             _calendarVisibility[calendarId] = isVisible;
             await RefreshActiveViewAsync();
         }
 
-        // ── Calendar management ───────────────────────────────────────────────
-
-        private async void OnAddCalendar()
+        public async void OnAddCalendar()
         {
             await _calendarDialogService.ShowCreateCalendarDialogAsync();
         }
 
-        private async void OnEditCalendar(Calendar calendar)
+        public async void OnEditCalendar(Calendar calendar)
         {
             await _calendarDialogService.ShowEditCalendarDialogAsync(calendar);
         }
 
-        private async void OnDeleteCalendar(Calendar calendar)
+        public async void OnDeleteCalendar(Calendar calendar)
         {
             await _calendarDialogService.ShowDeleteCalendarDialogAsync(calendar);
         }
@@ -327,20 +321,17 @@ namespace Chronicle
 
         private void RenderMiniMonth()
         {
-            _miniMonthRenderer.Render(
-                _displayMonth,
-                _selectedDate,
-                OnMiniMonthDateSelected,
-                OnMiniMonthPrevMonth,
-                OnMiniMonthNextMonth);
+            _miniMonthRenderer.Render(_displayMonth, _selectedDate);
         }
+
+        // ── ICalendarInteractionHost: mini-month routing ──────────────────────
 
         /// <summary>
         /// A day was clicked in the mini month. Update the selected date and,
         /// if the clicked day belongs to a different month (e.g. a trailing/
         /// leading adjacent-month day), move the displayed month to match.
         /// </summary>
-        private async void OnMiniMonthDateSelected(DateTime date)
+        public async void OnMiniMonthDateSelected(DateTime date)
         {
             if (!DateHelpers.IsInMonth(date, _displayMonth))
             {
@@ -354,19 +345,21 @@ namespace Chronicle
             }
         }
 
-        private async void OnMiniMonthPrevMonth()
+        public async void OnMiniMonthPrevMonth()
         {
             _displayMonth = _displayMonth.AddMonths(-1);
             await RefreshActiveViewAsync();
         }
 
-        private async void OnMiniMonthNextMonth()
+        public async void OnMiniMonthNextMonth()
         {
             _displayMonth = _displayMonth.AddMonths(1);
             await RefreshActiveViewAsync();
         }
 
         // ── Selected day ──────────────────────────────────────────────────────
+
+        // ── ICalendarInteractionHost: day selection ───────────────────────────
 
         /// <summary>
         /// Selects a day, updating the shared <see cref="_selectedDate"/> and the
@@ -377,6 +370,8 @@ namespace Chronicle
         /// days are visible and may cross the loaded range, so that case falls
         /// back to a full refresh.
         /// </summary>
+        public void OnDaySelected(DateTime date) => SelectDate(date);
+
         private async void SelectDate(DateTime date)
         {
             var previousDate = _selectedDate;
@@ -409,13 +404,7 @@ namespace Chronicle
         {
             var dayKey = DateHelpers.GetLocalDayKey(_selectedDate);
             var events = _eventsByDate.GetValueOrDefault(dayKey) ?? new List<Event>();
-            _selectedDayRenderer.Render(
-                _selectedDate, events, _allCalendars, OnSelectedDayEventClicked);
-        }
-
-        private async void OnSelectedDayEventClicked(Event evt)
-        {
-            await EditEventAsync(evt);
+            _selectedDayRenderer.Render(_selectedDate, events, _allCalendars);
         }
 
         // ── Event create / edit popovers ──────────────────────────────────────
@@ -597,13 +586,7 @@ namespace Chronicle
         private void RenderCalendarGrid()
         {
             _calendarGridRenderer.RenderCalendarGrid(
-                _displayMonth,
-                _selectedDate,
-                _eventsByDate,
-                _allCalendars,
-                onDaySelected: SelectDate,
-                onCreateOnDay: OnDayActivated,
-                onEventClicked: ShowEventPopover);
+                _displayMonth, _selectedDate, _eventsByDate, _allCalendars);
         }
 
         // ── Week view rendering ───────────────────────────────────────────────
@@ -611,20 +594,16 @@ namespace Chronicle
         private void RenderWeekView()
         {
             _weekViewRenderer.Render(
-                _selectedDate,
-                _eventsByDate,
-                _allCalendars,
-                showAllDayBand: true,
-                onDaySelected: SelectDate,
-                onTimeSlotActivated: OnTimeSlotActivated,
-                onEventClicked: ShowEventPopover);
+                _selectedDate, _eventsByDate, _allCalendars, showAllDayBand: true);
         }
+
+        // ── ICalendarInteractionHost: empty-space activation ──────────────────
 
         /// <summary>
         /// Tapping an empty time slot in Week or Day View selects the day and
         /// opens the create-event popover pre-filled with the slot's start hour.
         /// </summary>
-        private async void OnTimeSlotActivated(DateTime dayDate, TimeSpan startTime)
+        public async void OnTimeSlotCreateRequested(DateTime dayDate, TimeSpan startTime)
         {
             SelectDate(dayDate);
             await CreateEventAsync(dayDate, dayDate.Date + startTime);
@@ -635,7 +614,7 @@ namespace Chronicle
         /// opens the create-event popover (defaulting to a 9am start). Tapping
         /// the day-number badge selects without creating.
         /// </summary>
-        private async void OnDayActivated(DateTime dayDate)
+        public async void OnDayCreateRequested(DateTime dayDate)
         {
             SelectDate(dayDate);
             await CreateEventAsync(dayDate, dayDate.Date.AddHours(9));
@@ -647,28 +626,29 @@ namespace Chronicle
         {
             var dayKey = DateHelpers.GetLocalDayKey(_selectedDate);
             var events = _eventsByDate.GetValueOrDefault(dayKey) ?? new List<Event>();
-            _dayViewRenderer.Render(
-                _selectedDate,
-                events,
-                _allCalendars,
-                onEventClicked: ShowEventPopover,
-                onTimeSlotActivated: OnTimeSlotActivated);
+            _dayViewRenderer.Render(_selectedDate, events, _allCalendars);
         }
 
-        // ── Event popover ─────────────────────────────────────────────────────
+        // ── ICalendarInteractionHost: event interaction ───────────────────────
 
         /// <summary>
-        /// Shows the read-only event popover anchored to the clicked event chip.
-        /// The popover's Edit/Delete buttons drive <see cref="EventPopover_EditRequested"/>
-        /// and <see cref="EventPopover_DeleteRequested"/>; clicking elsewhere or
-        /// the Close button dismisses it without further action.
+        /// Event-chip tap (Month/Week/Day): shows the read-only popover
+        /// anchored to the clicked chip. The popover's Edit/Delete buttons
+        /// drive <see cref="EventPopover_EditRequested"/> and
+        /// <see cref="EventPopover_DeleteRequested"/>.
         /// </summary>
-        private void ShowEventPopover(Event evt, FrameworkElement anchor)
+        public void OnEventClicked(Event evt, FrameworkElement anchor)
         {
             var calendar = _allCalendars.FirstOrDefault(c => c.Id == evt.CalendarId);
             _eventPopover.SetEvent(evt, calendar);
             _eventPopoverFlyout.ShowAt(anchor);
         }
+
+        /// <summary>
+        /// Selected-day panel row click: opens the edit popover directly,
+        /// bypassing the read-only popover (a deliberate product distinction).
+        /// </summary>
+        public async void OnEventActivated(Event evt) => await EditEventAsync(evt);
 
         private async void EventPopover_EditRequested(object? sender, Event evt)
         {
