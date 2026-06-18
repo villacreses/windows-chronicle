@@ -61,11 +61,27 @@ Local-time conversion required at UI boundaries.
 
 ## Avoid Premature MVVM
 
-Current complexity does not justify a framework migration.
+Prohibited:
 
-Rapid iteration is prioritized.
+- MVVM frameworks (CommunityToolkit.Mvvm, Prism, ReactiveUI)
+- DI containers
+- Reactive / observable libraries (Rx)
+- Event-bus libraries
 
-This decision may be revisited later.
+Permitted:
+
+- Plain interfaces, records, and shared callback objects passed at
+  construction time.
+
+The prohibition is on frameworks, not on ordinary C# composition. A single
+host interface that bundles renderer→MainWindow callbacks is not MVVM, not
+DI, and not an event bus — it is the seam that lets renderers stop taking
+N `Action<...>` parameters per `Render()` call (which allocates a closure
+per chip and violates the Idle Cost Budget).
+
+Rapid iteration remains prioritized. This decision may be revisited later
+if a framework's cost is justified against the Idle Cost Budget and the
+No New Dependencies guardrail.
 
 ---
 
@@ -113,6 +129,97 @@ transaction (DELETE events, then the calendar), rather than via a schema
 on existing databases without a migration (the schema is `CREATE TABLE IF
 NOT EXISTS` only), and never trips the FK constraint. The delete dialog
 surfaces the affected event count so the action is never silent.
+
+---
+
+## Idle Cost Budget
+
+Chronicle is designed to be left open for the entire computer session.
+Idle cost is therefore a first-class constraint, not a nice-to-have.
+
+Rules:
+
+- With the window open and no user interaction, Chronicle performs zero
+  allocations per second and issues zero SQLite queries.
+- No timers polling "now," no ambient background refresh loops, no
+  speculative prefetching.
+- The clock indicator (and any other time-derived visual) updates on a
+  coalesced low-frequency tick (≤ 1/minute) and only when the view that
+  consumes it is visible.
+- Future provider sync (Google, Outlook) is opt-in and scheduled with
+  user-visible state — never ambient "while app is open" work.
+
+Regressions to this budget are bugs, not optimizations to defer.
+
+---
+
+## No New Dependencies Without Justification
+
+Every NuGet package adds binary size, startup cost, and supply-chain
+surface. None of these costs are recoverable once the dependency is
+embedded.
+
+Rule:
+
+Any new NuGet reference requires a DECISIONS.md entry covering:
+
+- what it provides that cannot reasonably be written by hand
+- its impact on binary size and startup
+- why a smaller alternative was rejected
+
+Explicit ban list (consistent with "Avoid Premature MVVM"):
+
+- MVVM toolkits
+- DI containers
+- Rx / reactive libraries
+- Logging frameworks heavier than `System.Diagnostics`
+
+---
+
+## AOT / Trimming Compatibility
+
+Chronicle code must remain compatible with .NET AOT and trimming, even
+before AOT is shipped. The door stays open, and the patterns this rules
+out tend to correlate with the performance properties Chronicle wants
+anyway.
+
+Avoid:
+
+- heavy runtime reflection (`Type.GetMethod`, dynamic property lookup,
+  `Activator.CreateInstance` over open generics)
+- dynamic proxies / runtime code generation (`System.Reflection.Emit`,
+  `DynamicMethod`, expression-tree compilation in hot paths)
+- serializers and frameworks that require runtime type discovery without
+  source generators
+- any pattern flagged by AOT/trim warnings
+
+Prefer:
+
+- direct calls, source generators, hand-written mapping
+- `System.Text.Json` source-generated contexts over reflection-based
+  serialization, when serialization is needed at all
+
+This guardrail composes with "No New Dependencies Without
+Justification": a candidate package that emits trim warnings is a
+stronger no.
+
+---
+
+## PR Perf-Impact Line
+
+Any PR that touches a renderer or a repository includes a one-line
+allocation/query impact statement in its description.
+
+Examples:
+
+- "No new per-render allocations; no new queries."
+- "Adds one SQLite query per month change; result cached in `_eventsByDate`."
+- "Replaces per-chip closure with shared handler — eliminates O(events)
+  allocations per render."
+
+The line is cheap to write and forces the question to be asked while the
+change is fresh. Reviewers should reject renderer/repository PRs that
+omit it.
 
 ---
 

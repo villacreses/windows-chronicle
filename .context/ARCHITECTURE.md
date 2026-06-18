@@ -35,6 +35,13 @@ Reason:
 - provider interoperability
 - synchronization correctness
 
+UTC→local conversion happens **once per render at the view boundary**, not
+per event chip. Renderers receive already-local values (or a single
+TimeZoneInfo captured for the render pass); they do not call
+`ToLocalTime()` inside per-event loops. This matters because event-chip
+loops are the hot path that the Idle Cost Budget (see DECISIONS.md) is
+written to protect.
+
 ## Provider Strategy
 
 Future providers:
@@ -186,12 +193,51 @@ DECISIONS.md.
 
 ## Performance Philosophy
 
-Calendar applications are read-heavy.
+Calendar applications are read-heavy. Chronicle is also designed to be
+left open for an entire computer session, so steady-state cost matters as
+much as peak cost.
 
 Optimize for:
 
 - startup speed
 - rendering speed
 - low memory consumption
+- low idle cost (see "Idle Cost Budget" in DECISIONS.md)
 
 Avoid abstractions that materially harm responsiveness.
+
+### Bounded Visuals Are Reused, Not Rebuilt
+
+Several visual element counts are fixed by the calendar model:
+
+- 24 hour rows in a timeline
+- 7 day columns in Week View
+- 42 cells in a month grid (6 weeks × 7 days)
+
+These are built once and updated in place on subsequent renders (text,
+brushes, highlight state). Event chips, whose count is unbounded, may be
+rebuilt — preferably from a pool — but the surrounding scaffolding is
+not.
+
+Selection-only changes (`SelectDate` to a day already in the loaded
+range) must not reallocate cell, gridline, gutter, or column visuals.
+Reserve full rebuild for range changes (month / week / day moved).
+
+### View Switching Does Not Query
+
+Toggling Month ↔ Week ↔ Day inside the same already-loaded date range
+issues zero SQLite queries. `_eventsByDate` is the shared source of
+truth and is refilled only when the loaded range actually changes.
+
+### Repositories Return Concrete Collections
+
+Repository methods return `List<T>` or arrays — never `IEnumerable<T>`.
+This prevents hidden re-enumeration and LINQ allocation in render paths,
+and makes the cost of each call legible at the call site.
+
+### Single Event Cache
+
+`_eventsByDate` (on `MainWindow`) is the only event cache in the
+application. Renderers do not keep their own copy of event lists; they
+read from `_eventsByDate` (or receive the relevant slice as a parameter)
+each render. This keeps cache invalidation a one-place problem.
