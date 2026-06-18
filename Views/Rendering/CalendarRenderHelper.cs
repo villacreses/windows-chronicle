@@ -3,6 +3,7 @@ using Chronicle.Models;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using System;
 using System.Collections.Generic;
@@ -37,18 +38,20 @@ internal static class CalendarRenderHelper
 
     /// <summary>
     /// Creates a filled "pill" event chip: a soft, calendar-tinted background
-    /// with lightened calendar-colored text. Single tap opens the popover (via
-    /// <paramref name="onEventClicked"/>); both tap gestures are marked handled
-    /// so they don't bubble to the day cell's select/create handlers.
+    /// with lightened calendar-colored text. The chip is an
+    /// <see cref="EventTapTarget"/> carrying its <see cref="Event"/> and the
+    /// supplied <paramref name="host"/>; taps are routed by a single
+    /// class-level static handler. No per-chip closure, and no tap-handler
+    /// parameter threaded through the call chain — see
+    /// <see cref="EventTapTarget"/>.
     /// </summary>
     public static Border CreateEventChip(
         Event evt,
         IEnumerable<Calendar> calendars,
         string text,
-        Action<Event, FrameworkElement> onEventClicked)
+        ICalendarInteractionHost host)
     {
-        var capturedEvt = evt;
-        var calColor = ColorHelper.ResolveCalendarColor(calendars, capturedEvt.CalendarId);
+        var calColor = ColorHelper.ResolveCalendarColor(calendars, evt.CalendarId);
 
         var chipText = new TextBlock
         {
@@ -62,6 +65,7 @@ internal static class CalendarRenderHelper
 
         var chip = new Border
         {
+            Tag = new EventTapTarget(evt, host),
             Child = chipText,
             Background = new SolidColorBrush(ColorHelper.Soften(calColor)),
             CornerRadius = new CornerRadius(4),
@@ -69,12 +73,8 @@ internal static class CalendarRenderHelper
             Height = ChipHeight
         };
 
-        chip.Tapped += (s, e) =>
-        {
-            e.Handled = true;
-            onEventClicked(capturedEvt, chip);
-        };
-        chip.DoubleTapped += (s, e) => e.Handled = true;
+        chip.Tapped += EventTapTarget.OnTapped;
+        chip.DoubleTapped += EventTapTarget.MarkHandled;
 
         return chip;
     }

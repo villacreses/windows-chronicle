@@ -3,6 +3,7 @@ using Chronicle.Models;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Shapes;
 using System;
@@ -54,16 +55,18 @@ internal static class TimelineRenderHelper
     /// <summary>
     /// Builds just the day column body — gridlines, now-line, and timed event
     /// blocks — without the gutter wrapper. Used by <c>WeekViewRenderer</c>,
-    /// which supplies a single shared gutter for all seven columns.
-    /// <paramref name="onCreateAt"/> fires when an empty time slot is tapped,
-    /// with the slot's start hour.
+    /// which supplies a single shared gutter for all seven columns. Event-block
+    /// taps route through <paramref name="host"/> directly via
+    /// <see cref="EventTapTarget"/>; no tap-handler parameter is threaded
+    /// through. <paramref name="onCreateAt"/> fires when an empty time slot is
+    /// tapped, with the slot's start hour.
     /// </summary>
     public static FrameworkElement BuildDayColumnContent(
         DateTime dayDate,
         IList<Event> eventsForDay,
         IList<Calendar> calendars,
         TimeZoneInfo timeZone,
-        Action<Event, FrameworkElement> onEventClicked,
+        ICalendarInteractionHost host,
         Action<TimeSpan> onCreateAt)
     {
         // Transparent background makes empty areas hit-testable so
@@ -87,7 +90,7 @@ internal static class TimelineRenderHelper
         var placed = new List<(Border Block, PackedEvent Packed)>();
         foreach (var pe in PackOverlappingEvents(eventsForDay, TotalHeight, timeZone))
         {
-            var block = RenderEventBlock(pe, calendars, timeZone, onEventClicked);
+            var block = RenderEventBlock(pe, calendars, timeZone, host);
             Canvas.SetTop(block, pe.YPosition);
             block.Height = pe.Height - 2;
             canvas.Children.Add(block);
@@ -112,17 +115,17 @@ internal static class TimelineRenderHelper
     /// Main entry point for Day View: renders a complete timeline (gutter +
     /// gridlines + now-line + timed events) for <paramref name="dayDate"/>.
     /// <paramref name="eventsForDay"/> must contain only timed events (all-day
-    /// events are handled by the caller). <paramref name="onEventClicked"/> fires
-    /// when an event block is tapped (the <see cref="FrameworkElement"/> is the
-    /// block, used to anchor the popover); <paramref name="onCreateAt"/> fires
-    /// when an empty time slot is tapped, with the slot's start hour.
+    /// events are handled by the caller). Event-block taps route through
+    /// <paramref name="host"/> directly via <see cref="EventTapTarget"/>.
+    /// <paramref name="onCreateAt"/> fires when an empty time slot is tapped,
+    /// with the slot's start hour.
     /// </summary>
     public static UIElement BuildDayTimeline(
         DateTime dayDate,
         IList<Event> eventsForDay,
         IList<Calendar> calendars,
         TimeZoneInfo timeZone,
-        Action<Event, FrameworkElement> onEventClicked,
+        ICalendarInteractionHost host,
         Action<TimeSpan> onCreateAt)
     {
         var timeline = new Grid { Height = TotalHeight };
@@ -133,7 +136,7 @@ internal static class TimelineRenderHelper
         Grid.SetColumn(gutter, 0);
         timeline.Children.Add(gutter);
 
-        var dayCol = BuildDayColumnContent(dayDate, eventsForDay, calendars, timeZone, onEventClicked, onCreateAt);
+        var dayCol = BuildDayColumnContent(dayDate, eventsForDay, calendars, timeZone, host, onCreateAt);
         Grid.SetColumn(dayCol, 1);
         timeline.Children.Add(dayCol);
 
@@ -379,7 +382,7 @@ internal static class TimelineRenderHelper
         PackedEvent pe,
         IList<Calendar> calendars,
         TimeZoneInfo timeZone,
-        Action<Event, FrameworkElement> onEventClicked)
+        ICalendarInteractionHost host)
     {
         var evt = pe.Event;
         var color = ColorHelper.ResolveCalendarColor(calendars, evt.CalendarId);
@@ -408,6 +411,7 @@ internal static class TimelineRenderHelper
 
         var block = new Border
         {
+            Tag = new EventTapTarget(evt, host),
             Child = content,
             Background = new SolidColorBrush(ColorHelper.Soften(color)),
             BorderBrush = new SolidColorBrush(color),
@@ -416,13 +420,8 @@ internal static class TimelineRenderHelper
             Padding = new Thickness(7, 3, 7, 3)
         };
 
-        var capturedEvt = evt;
-        block.Tapped += (s, e) =>
-        {
-            e.Handled = true;
-            onEventClicked(capturedEvt, block);
-        };
-        block.DoubleTapped += (s, e) => e.Handled = true;
+        block.Tapped += EventTapTarget.OnTapped;
+        block.DoubleTapped += EventTapTarget.MarkHandled;
 
         return block;
     }

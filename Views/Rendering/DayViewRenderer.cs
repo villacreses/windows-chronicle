@@ -34,15 +34,11 @@ internal sealed class DayViewRenderer
 {
     private readonly Grid _host;
     private readonly ICalendarInteractionHost _interactions;
-    // Cached method-group conversion of _interactions.OnEventClicked, passed
-    // to static chip/timeline helpers without per-call delegate allocation.
-    private readonly Action<Event, FrameworkElement> _onEventClicked;
 
     public DayViewRenderer(Grid host, ICalendarInteractionHost interactions)
     {
         _host = host;
         _interactions = interactions;
-        _onEventClicked = interactions.OnEventClicked;
     }
 
     /// <summary>
@@ -66,7 +62,7 @@ internal sealed class DayViewRenderer
 
         if (allDay.Count > 0)
         {
-            var band = BuildAllDayBand(allDay, calendars, _onEventClicked);
+            var band = BuildAllDayBand(allDay, calendars, _interactions);
             Grid.SetRow(band, 0);
             _host.Children.Add(band);
         }
@@ -80,7 +76,7 @@ internal sealed class DayViewRenderer
                 timed,
                 calendars,
                 TimeZoneInfo.Local,
-                _onEventClicked,
+                _interactions,
                 time => _interactions.OnTimeSlotCreateRequested(selectedDate, time))
         };
         Grid.SetRow(scroll, 1);
@@ -97,7 +93,7 @@ internal sealed class DayViewRenderer
     // ── All-day band ──────────────────────────────────────────────────────
 
     private static Border BuildAllDayBand(
-        List<Event> allDay, List<Calendar> calendars, Action<Event, FrameworkElement> onEventClicked)
+        List<Event> allDay, List<Calendar> calendars, ICalendarInteractionHost interactions)
     {
         var grid = new Grid { Margin = new Thickness(0, 4, 8, 8) };
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(TimelineRenderHelper.GutterWidth) });
@@ -117,7 +113,7 @@ internal sealed class DayViewRenderer
 
         var chips = new StackPanel { Orientation = Orientation.Vertical, Spacing = 3 };
         foreach (var evt in allDay)
-            chips.Children.Add(CalendarRenderHelper.CreateEventChip(evt, calendars, evt.Title, onEventClicked));
+            chips.Children.Add(CalendarRenderHelper.CreateEventChip(evt, calendars, evt.Title, interactions));
         Grid.SetColumn(chips, 1);
         grid.Children.Add(chips);
 

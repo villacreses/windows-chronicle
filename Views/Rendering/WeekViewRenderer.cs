@@ -37,16 +37,11 @@ internal sealed class WeekViewRenderer
 {
     private readonly Grid _host;
     private readonly ICalendarInteractionHost _interactions;
-    // Cached method-group conversion of _interactions.OnEventClicked, passed
-    // to CalendarRenderHelper.CreateEventChip and TimelineRenderHelper without
-    // allocating a delegate per event chip. Per the Idle Cost Budget.
-    private readonly Action<Event, FrameworkElement> _onEventClicked;
 
     public WeekViewRenderer(Grid host, ICalendarInteractionHost interactions)
     {
         _host = host;
         _interactions = interactions;
-        _onEventClicked = interactions.OnEventClicked;
     }
 
     /// <summary>
@@ -79,7 +74,7 @@ internal sealed class WeekViewRenderer
         topSection.Children.Add(BuildDayHeaders(weekDays, today, selKey, _interactions));
         if (showAllDayBand)
         {
-            var allDayBand = BuildAllDayBand(weekDays, eventsByDate, calendars, _onEventClicked);
+            var allDayBand = BuildAllDayBand(weekDays, eventsByDate, calendars, _interactions);
             if (allDayBand is not null)
                 topSection.Children.Add(allDayBand);
         }
@@ -87,7 +82,7 @@ internal sealed class WeekViewRenderer
         _host.Children.Add(topSection);
 
         // Row 1: scrollable 7-column timeline.
-        var timelinesGrid = BuildTimelinesGrid(weekDays, eventsByDate, calendars, _interactions, _onEventClicked);
+        var timelinesGrid = BuildTimelinesGrid(weekDays, eventsByDate, calendars, _interactions);
 
         // Auto-scroll to ~7am, or earlier if the first timed event across the
         // whole week starts before then.
@@ -197,7 +192,7 @@ internal sealed class WeekViewRenderer
         IReadOnlyList<DateTime> weekDays,
         Dictionary<DateTime, List<Event>> eventsByDate,
         List<Calendar> calendars,
-        Action<Event, FrameworkElement> onEventClicked)
+        ICalendarInteractionHost interactions)
     {
         var allDayPerDay = weekDays.Select(d =>
             (eventsByDate.GetValueOrDefault(DateHelpers.GetLocalDayKey(d)) ?? new List<Event>())
@@ -235,7 +230,7 @@ internal sealed class WeekViewRenderer
                 Margin = new Thickness(1, 2, 1, 2)
             };
             foreach (var evt in events)
-                chips.Children.Add(CalendarRenderHelper.CreateEventChip(evt, calendars, evt.Title, onEventClicked));
+                chips.Children.Add(CalendarRenderHelper.CreateEventChip(evt, calendars, evt.Title, interactions));
 
             Grid.SetColumn(chips, i + 1);
             grid.Children.Add(chips);
@@ -256,8 +251,7 @@ internal sealed class WeekViewRenderer
         IReadOnlyList<DateTime> weekDays,
         Dictionary<DateTime, List<Event>> eventsByDate,
         List<Calendar> calendars,
-        ICalendarInteractionHost interactions,
-        Action<Event, FrameworkElement> onEventClicked)
+        ICalendarInteractionHost interactions)
     {
         var grid = new Grid { Height = TimelineRenderHelper.TotalHeight };
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(TimelineRenderHelper.GutterWidth) });
@@ -283,7 +277,7 @@ internal sealed class WeekViewRenderer
                 timedEvents,
                 calendars,
                 TimeZoneInfo.Local,
-                onEventClicked,
+                interactions,
                 time => interactions.OnTimeSlotCreateRequested(capturedDate, time));
 
             // Border wrapper supplies the 1px left hairline divider between columns.

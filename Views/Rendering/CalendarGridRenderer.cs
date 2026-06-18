@@ -37,12 +37,6 @@ internal sealed class CalendarGridRenderer
     private readonly Grid _dayNamesGrid;
     private readonly Grid _calendarGrid;
     private readonly ICalendarInteractionHost _interactions;
-    // Cached method-group conversion of _interactions.OnEventClicked.
-    // CalendarRenderHelper.CreateEventChip still takes an Action (it is a
-    // shared static helper); caching the delegate avoids one allocation per
-    // chip per Render. Per the Idle Cost Budget, every avoidable per-render
-    // allocation in the chip path is worth eliminating.
-    private readonly Action<Event, FrameworkElement> _onEventClicked;
     private readonly Dictionary<DateTime, Border> _dayCells = new();
     private readonly Dictionary<DateTime, Border> _dayNumberCircles = new();
     private readonly Dictionary<DateTime, TextBlock> _dayNumberBlocks = new();
@@ -55,7 +49,6 @@ internal sealed class CalendarGridRenderer
         _dayNamesGrid = dayNamesGrid;
         _calendarGrid = calendarGrid;
         _interactions = interactions;
-        _onEventClicked = interactions.OnEventClicked;
     }
 
     public void RenderDayHeaders()
@@ -191,7 +184,7 @@ internal sealed class CalendarGridRenderer
                 content.Children.Add(eventsArea);
 
                 eventsArea.SizeChanged += (s, e) => FillEventsArea(
-                    eventsArea, eventsHost, events, calendars, cellDate, _onEventClicked, _interactions);
+                    eventsArea, eventsHost, events, calendars, cellDate, _interactions);
             }
 
             // Tap on the day-number badge selects (marked handled so it does NOT
@@ -238,7 +231,6 @@ internal sealed class CalendarGridRenderer
         List<Event> events,
         List<Calendar> calendars,
         DateTime cellDate,
-        Action<Event, FrameworkElement> onEventClicked,
         ICalendarInteractionHost interactions)
     {
         var available = area.ActualHeight;
@@ -264,7 +256,7 @@ internal sealed class CalendarGridRenderer
         {
             foreach (var evt in events)
                 host.Children.Add(CalendarRenderHelper.CreateEventChip(
-                    evt, calendars, FormatChipText(evt), onEventClicked));
+                    evt, calendars, FormatChipText(evt), interactions));
             return;
         }
 
@@ -272,7 +264,7 @@ internal sealed class CalendarGridRenderer
         int visible = rows - 1;
         for (int i = 0; i < visible; i++)
             host.Children.Add(CalendarRenderHelper.CreateEventChip(
-                events[i], calendars, FormatChipText(events[i]), onEventClicked));
+                events[i], calendars, FormatChipText(events[i]), interactions));
 
         int hidden = events.Count - visible;
         host.Children.Add(CalendarRenderHelper.CreateOverflowChip(
