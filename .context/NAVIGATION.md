@@ -97,10 +97,10 @@ Week view day selection and time-slot interaction:
 - Tapping an empty timeline slot calls `OnTimeSlotCreateRequested(day, hour)`, which
   selects the day and opens `EventEditPopover` pre-filled with that day and
   start hour. The same callback is shared with Day View.
-- Selecting a day already in the visible week uses the incremental path; the
-  week view is fully re-rendered to update the selected day-header highlight
-  (the new renderer has no `UpdateSelectedDate` — rebuilding is cheap and
-  keeps the renderer stateless).
+- Selecting a day already in the visible week uses the incremental path:
+  `WeekViewRenderer.UpdateSelectedDate` mutates the previous and new
+  selected-day header highlights in place. Columns, gridlines, chips, and
+  scroll state are not touched.
 - Selecting a day in a different week (e.g. from the mini month) re-anchors
   `_displayMonth` and calls `RefreshActiveViewAsync`, because the visible seven
   days and the loaded range change.

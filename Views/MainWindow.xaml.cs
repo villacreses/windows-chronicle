@@ -393,10 +393,8 @@ namespace Chronicle
 
             _miniMonthRenderer.UpdateSelectedDate(previousDate, _selectedDate);
             _calendarGridRenderer.UpdateSelectedDate(previousDate, _selectedDate);
-            // Week view has no incremental update path — re-render to refresh
-            // the selected day header highlight.
             if (_currentView == CalendarView.Week)
-                RenderWeekView();
+                _weekViewRenderer.UpdateSelectedDate(previousDate, _selectedDate);
             RenderSelectedDay();
         }
 

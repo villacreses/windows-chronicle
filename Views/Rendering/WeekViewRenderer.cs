@@ -20,23 +20,34 @@ namespace Chronicle.Views.Rendering;
 /// <list type="bullet">
 ///   <item>Derives the seven visible days from the selected date via
 ///   <see cref="DateHelpers.BuildWeek"/>; no separate week or day state is
-///   stored — rebuilding is the only update path.</item>
+///   stored.</item>
 ///   <item>Delegates each day's timeline to
 ///   <see cref="TimelineRenderHelper.BuildDayColumnContent"/>; the shared gutter
 ///   comes from <see cref="TimelineRenderHelper.BuildSharedGutter"/>. Each
 ///   day's overlap packing is independent.</item>
 ///   <item>Reports day-header taps, empty time-slot taps, and event taps
 ///   back to the host via <see cref="ICalendarInteractionHost"/>.</item>
+///   <item>Retains per-day day-number visuals so <see cref="UpdateSelectedDate"/>
+///   can mutate the previous and new selected-day highlights in place without
+///   rebuilding columns, gridlines, chips, or scroll state. Full
+///   <see cref="Render"/> is reserved for range changes (cross-week navigation).</item>
 /// </list>
 ///
 /// Colors from <see cref="Theme"/>; shared visuals from
-/// <see cref="CalendarRenderHelper"/>. The renderer is stateless beyond
-/// <c>_host</c> — each <see cref="Render"/> call rebuilds from scratch.
+/// <see cref="CalendarRenderHelper"/>.
 /// </summary>
 internal sealed class WeekViewRenderer
 {
     private readonly Grid _host;
     private readonly ICalendarInteractionHost _interactions;
+    // Per-day-header visuals retained from the last Render() so selection-only
+    // changes can update highlights in place. Selection within the visible
+    // week must not reallocate columns, gridlines, chips, or scroll state —
+    // see the "Bounded Visuals Are Reused" guardrail in ARCHITECTURE.md.
+    private readonly Dictionary<DateTime, Border> _dayNumberCircles = new();
+    private readonly Dictionary<DateTime, TextBlock> _dayNumberBlocks = new();
+
+    private DateTime _selectedDate;
 
     public WeekViewRenderer(Grid host, ICalendarInteractionHost interactions)
     {
@@ -59,6 +70,10 @@ internal sealed class WeekViewRenderer
         List<Calendar> calendars,
         bool showAllDayBand)
     {
+        _selectedDate = DateHelpers.GetLocalDayKey(selectedDate);
+        _dayNumberCircles.Clear();
+        _dayNumberBlocks.Clear();
+
         _host.Children.Clear();
         _host.ColumnDefinitions.Clear();
         _host.RowDefinitions.Clear();
@@ -67,11 +82,10 @@ internal sealed class WeekViewRenderer
 
         var weekDays = DateHelpers.BuildWeek(selectedDate);
         var today = DateHelpers.GetLocalDayKey(DateTime.Now);
-        var selKey = DateHelpers.GetLocalDayKey(selectedDate);
 
         // Row 0: sticky top section — day headers + optional all-day band.
         var topSection = new StackPanel { Orientation = Orientation.Vertical };
-        topSection.Children.Add(BuildDayHeaders(weekDays, today, selKey, _interactions));
+        topSection.Children.Add(BuildDayHeaders(weekDays, today, _selectedDate));
         if (showAllDayBand)
         {
             var allDayBand = BuildAllDayBand(weekDays, eventsByDate, calendars, _interactions);
@@ -108,13 +122,42 @@ internal sealed class WeekViewRenderer
         _host.Children.Add(scroll);
     }
 
+    /// <summary>
+    /// Selection-only update for a day already in the currently rendered week.
+    /// Mutates the previous and new selected-day highlight in place — chips,
+    /// gridlines, timeline columns, gutter, and scroll state are not touched.
+    /// Cross-week selection must go through a full <see cref="Render"/>
+    /// instead (the visible seven days change).
+    /// </summary>
+    public void UpdateSelectedDate(DateTime previousDate, DateTime selectedDate)
+    {
+        previousDate = DateHelpers.GetLocalDayKey(previousDate);
+        selectedDate = DateHelpers.GetLocalDayKey(selectedDate);
+        _selectedDate = selectedDate;
+
+        var today = DateHelpers.GetLocalDayKey(DateTime.Now);
+
+        ApplyDayHeaderVisuals(previousDate, today);
+        ApplyDayHeaderVisuals(selectedDate, today);
+    }
+
+    private void ApplyDayHeaderVisuals(DateTime dayKey, DateTime today)
+    {
+        if (!_dayNumberCircles.TryGetValue(dayKey, out var circle)
+            || !_dayNumberBlocks.TryGetValue(dayKey, out var numberText))
+            return;
+
+        bool isSelected = DateHelpers.IsSameDay(dayKey, _selectedDate);
+        bool isToday = DateHelpers.IsSameDay(dayKey, today);
+        CalendarRenderHelper.ApplyDayNumberVisuals(circle, numberText, isSelected, isToday);
+    }
+
     // ── Day headers ───────────────────────────────────────────────────────
 
-    private static FrameworkElement BuildDayHeaders(
+    private FrameworkElement BuildDayHeaders(
         IReadOnlyList<DateTime> weekDays,
         DateTime today,
-        DateTime selKey,
-        ICalendarInteractionHost interactions)
+        DateTime selKey)
     {
         var grid = new Grid { Height = 56 };
         // Gutter placeholder keeps headers aligned with the timeline columns below.
@@ -137,14 +180,14 @@ internal sealed class WeekViewRenderer
             bool isSelected = DateHelpers.IsSameDay(dayDate, selKey);
             var captured = dayDate;
 
-            var header = BuildDayHeader(dayDate, isToday, isSelected, () => interactions.OnDaySelected(captured));
+            var header = BuildDayHeader(dayDate, isToday, isSelected, () => _interactions.OnDaySelected(captured));
             Grid.SetColumn(header, i + 1);
             grid.Children.Add(header);
         }
         return grid;
     }
 
-    private static Border BuildDayHeader(DateTime dayDate, bool isToday, bool isSelected, Action onClicked)
+    private Border BuildDayHeader(DateTime dayDate, bool isToday, bool isSelected, Action onClicked)
     {
         var stack = new StackPanel
         {
@@ -168,6 +211,10 @@ internal sealed class WeekViewRenderer
         circle.HorizontalAlignment = HorizontalAlignment.Center;
         CalendarRenderHelper.ApplyDayNumberVisuals(circle, numberText, isSelected, isToday);
         stack.Children.Add(circle);
+
+        var dayKey = DateHelpers.GetLocalDayKey(dayDate);
+        _dayNumberCircles[dayKey] = circle;
+        _dayNumberBlocks[dayKey] = numberText;
 
         var border = new Border
         {
