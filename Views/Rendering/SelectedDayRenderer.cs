@@ -28,23 +28,26 @@ namespace Chronicle.Views.Rendering;
 internal sealed class SelectedDayRenderer
 {
     private readonly StackPanel _container;
+    private readonly ICalendarInteractionHost _interactions;
 
-    public SelectedDayRenderer(StackPanel container)
+    public SelectedDayRenderer(StackPanel container, ICalendarInteractionHost interactions)
     {
         _container = container;
+        _interactions = interactions;
     }
 
     /// <summary>
     /// Renders the panel for <paramref name="selectedDate"/> and its
     /// <paramref name="events"/> (already filtered to visible calendars and
-    /// ordered by start time). <paramref name="onEventClicked"/> fires when
-    /// an event row is clicked (opens the edit dialog).
+    /// ordered by start time). Row clicks route through
+    /// <see cref="ICalendarInteractionHost.OnEventActivated"/> — which opens
+    /// the edit popover directly, a deliberately different interaction from
+    /// the grid/week event chips' read-only popover.
     /// </summary>
     public void Render(
         DateTime selectedDate,
         List<Event> events,
-        List<Calendar> calendars,
-        Action<Event> onEventClicked)
+        List<Calendar> calendars)
     {
         _container.Children.Clear();
 
@@ -78,11 +81,11 @@ internal sealed class SelectedDayRenderer
         }
 
         foreach (var evt in events)
-            _container.Children.Add(BuildEventRow(evt, calendars, onEventClicked));
+            _container.Children.Add(BuildEventRow(evt, calendars, _interactions));
     }
 
     private static Button BuildEventRow(
-        Event evt, List<Calendar> calendars, Action<Event> onEventClicked)
+        Event evt, List<Calendar> calendars, ICalendarInteractionHost interactions)
     {
         var capturedEvt = evt;
 
@@ -140,7 +143,7 @@ internal sealed class SelectedDayRenderer
             Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
             BorderThickness = new Thickness(0)
         };
-        row.Click += (s, e) => onEventClicked(capturedEvt);
+        row.Click += (s, e) => interactions.OnEventActivated(capturedEvt);
 
         return row;
     }

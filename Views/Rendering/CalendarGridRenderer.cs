@@ -36,6 +36,7 @@ internal sealed class CalendarGridRenderer
 {
     private readonly Grid _dayNamesGrid;
     private readonly Grid _calendarGrid;
+    private readonly ICalendarInteractionHost _interactions;
     private readonly Dictionary<DateTime, Border> _dayCells = new();
     private readonly Dictionary<DateTime, Border> _dayNumberCircles = new();
     private readonly Dictionary<DateTime, TextBlock> _dayNumberBlocks = new();
@@ -43,10 +44,11 @@ internal sealed class CalendarGridRenderer
     private DateTime _displayMonth;
     private DateTime _selectedDate;
 
-    public CalendarGridRenderer(Grid dayNamesGrid, Grid calendarGrid)
+    public CalendarGridRenderer(Grid dayNamesGrid, Grid calendarGrid, ICalendarInteractionHost interactions)
     {
         _dayNamesGrid = dayNamesGrid;
         _calendarGrid = calendarGrid;
+        _interactions = interactions;
     }
 
     public void RenderDayHeaders()
@@ -74,22 +76,17 @@ internal sealed class CalendarGridRenderer
     }
 
     /// <summary>
-    /// Renders the month grid for <paramref name="displayMonth"/>.
-    /// <paramref name="onDaySelected"/> fires on a tap of the day number badge
-    /// (selects the day). <paramref name="onCreateOnDay"/> fires on a tap of an
-    /// in-month cell's empty area (creates an event for that day; the host
-    /// typically also selects it).
-    /// <paramref name="onEventClicked"/> fires when an event chip is pressed,
-    /// passing the event and the chip element to anchor a popover to.
+    /// Renders the month grid for <paramref name="displayMonth"/>. Day-number
+    /// taps, empty-cell taps, and event-chip taps all route through
+    /// <see cref="ICalendarInteractionHost"/> (see <c>OnDaySelected</c>,
+    /// <c>OnDayCreateRequested</c>, and <c>OnEventClicked</c>) — no callbacks
+    /// are threaded through the call chain.
     /// </summary>
     public void RenderCalendarGrid(
         DateTime displayMonth,
         DateTime selectedDate,
         Dictionary<DateTime, List<Event>> eventsByDate,
-        List<Calendar> calendars,
-        Action<DateTime> onDaySelected,
-        Action<DateTime> onCreateOnDay,
-        Action<Event, FrameworkElement> onEventClicked)
+        List<Calendar> calendars)
     {
         _displayMonth = DateHelpers.GetLocalDayKey(displayMonth);
         _selectedDate = DateHelpers.GetLocalDayKey(selectedDate);
@@ -122,7 +119,7 @@ internal sealed class CalendarGridRenderer
             var cell = CreateDayCell(
                 cellDate, isInMonth,
                 isToday: DateHelpers.IsSameDay(cellDate, today),
-                eventsByDate, calendars, onDaySelected, onCreateOnDay, onEventClicked);
+                eventsByDate, calendars);
             var dayKey = DateHelpers.GetLocalDayKey(cellDate);
             _dayCells[dayKey] = cell;
             Grid.SetRow(cell, cellIndex / 7);
@@ -145,10 +142,7 @@ internal sealed class CalendarGridRenderer
     private Border CreateDayCell(
         DateTime cellDate, bool isInMonth, bool isToday,
         Dictionary<DateTime, List<Event>> eventsByDate,
-        List<Calendar> calendars,
-        Action<DateTime> onDaySelected,
-        Action<DateTime> onCreateOnDay,
-        Action<Event, FrameworkElement> onEventClicked)
+        List<Calendar> calendars)
     {
         var dayKey = DateHelpers.GetLocalDayKey(cellDate);
         bool isSelected = isInMonth && DateHelpers.IsSameDay(cellDate, _selectedDate);
@@ -190,7 +184,7 @@ internal sealed class CalendarGridRenderer
                 content.Children.Add(eventsArea);
 
                 eventsArea.SizeChanged += (s, e) => FillEventsArea(
-                    eventsArea, eventsHost, events, calendars, cellDate, onEventClicked, onDaySelected);
+                    eventsArea, eventsHost, events, calendars, cellDate, _interactions);
             }
 
             // Tap on the day-number badge selects (marked handled so it does NOT
@@ -200,9 +194,9 @@ internal sealed class CalendarGridRenderer
             numberCircle.Tapped += (s, e) =>
             {
                 e.Handled = true;
-                onDaySelected(cellDate);
+                _interactions.OnDaySelected(cellDate);
             };
-            border.Tapped += (s, e) => onCreateOnDay(cellDate);
+            border.Tapped += (s, e) => _interactions.OnDayCreateRequested(cellDate);
         }
 
         border.Child = content;
@@ -237,8 +231,7 @@ internal sealed class CalendarGridRenderer
         List<Event> events,
         List<Calendar> calendars,
         DateTime cellDate,
-        Action<Event, FrameworkElement> onEventClicked,
-        Action<DateTime> onDaySelected)
+        ICalendarInteractionHost interactions)
     {
         var available = area.ActualHeight;
 
@@ -263,7 +256,7 @@ internal sealed class CalendarGridRenderer
         {
             foreach (var evt in events)
                 host.Children.Add(CalendarRenderHelper.CreateEventChip(
-                    evt, calendars, FormatChipText(evt), onEventClicked));
+                    evt, calendars, FormatChipText(evt), interactions));
             return;
         }
 
@@ -271,11 +264,11 @@ internal sealed class CalendarGridRenderer
         int visible = rows - 1;
         for (int i = 0; i < visible; i++)
             host.Children.Add(CalendarRenderHelper.CreateEventChip(
-                events[i], calendars, FormatChipText(events[i]), onEventClicked));
+                events[i], calendars, FormatChipText(events[i]), interactions));
 
         int hidden = events.Count - visible;
         host.Children.Add(CalendarRenderHelper.CreateOverflowChip(
-            hidden, () => onDaySelected(cellDate)));
+            hidden, () => interactions.OnDaySelected(cellDate)));
     }
 
     private static string FormatChipText(Event evt)

@@ -33,25 +33,23 @@ namespace Chronicle.Views.Rendering;
 internal sealed class DayViewRenderer
 {
     private readonly Grid _host;
+    private readonly ICalendarInteractionHost _interactions;
 
-    public DayViewRenderer(Grid host)
+    public DayViewRenderer(Grid host, ICalendarInteractionHost interactions)
     {
         _host = host;
+        _interactions = interactions;
     }
 
     /// <summary>
     /// Renders <paramref name="dayEvents"/> (already filtered to visible
-    /// calendars) for <paramref name="selectedDate"/>.
-    /// <paramref name="onEventClicked"/> fires when an event is tapped (opens
-    /// the popover). <paramref name="onTimeSlotActivated"/> fires when an empty
-    /// time slot is tapped, with the day and the slot's start time.
+    /// calendars) for <paramref name="selectedDate"/>. Event taps and
+    /// empty-slot taps route through <see cref="ICalendarInteractionHost"/>.
     /// </summary>
     public void Render(
         DateTime selectedDate,
         List<Event> dayEvents,
-        List<Calendar> calendars,
-        Action<Event, FrameworkElement> onEventClicked,
-        Action<DateTime, TimeSpan> onTimeSlotActivated)
+        List<Calendar> calendars)
     {
         _host.Children.Clear();
         _host.ColumnDefinitions.Clear();
@@ -64,7 +62,7 @@ internal sealed class DayViewRenderer
 
         if (allDay.Count > 0)
         {
-            var band = BuildAllDayBand(allDay, calendars, onEventClicked);
+            var band = BuildAllDayBand(allDay, calendars, _interactions);
             Grid.SetRow(band, 0);
             _host.Children.Add(band);
         }
@@ -78,8 +76,8 @@ internal sealed class DayViewRenderer
                 timed,
                 calendars,
                 TimeZoneInfo.Local,
-                onEventClicked,
-                time => onTimeSlotActivated(selectedDate, time))
+                _interactions,
+                time => _interactions.OnTimeSlotCreateRequested(selectedDate, time))
         };
         Grid.SetRow(scroll, 1);
         _host.Children.Add(scroll);
@@ -95,7 +93,7 @@ internal sealed class DayViewRenderer
     // ── All-day band ──────────────────────────────────────────────────────
 
     private static Border BuildAllDayBand(
-        List<Event> allDay, List<Calendar> calendars, Action<Event, FrameworkElement> onEventClicked)
+        List<Event> allDay, List<Calendar> calendars, ICalendarInteractionHost interactions)
     {
         var grid = new Grid { Margin = new Thickness(0, 4, 8, 8) };
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(TimelineRenderHelper.GutterWidth) });
@@ -115,7 +113,7 @@ internal sealed class DayViewRenderer
 
         var chips = new StackPanel { Orientation = Orientation.Vertical, Spacing = 3 };
         foreach (var evt in allDay)
-            chips.Children.Add(CalendarRenderHelper.CreateEventChip(evt, calendars, evt.Title, onEventClicked));
+            chips.Children.Add(CalendarRenderHelper.CreateEventChip(evt, calendars, evt.Title, interactions));
         Grid.SetColumn(chips, 1);
         grid.Children.Add(chips);
 

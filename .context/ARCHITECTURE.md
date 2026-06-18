@@ -35,12 +35,27 @@ Reason:
 - provider interoperability
 - synchronization correctness
 
-UTC→local conversion happens **once per render at the view boundary**, not
-per event chip. Renderers receive already-local values (or a single
-TimeZoneInfo captured for the render pass); they do not call
-`ToLocalTime()` inside per-event loops. This matters because event-chip
-loops are the hot path that the Idle Cost Budget (see DECISIONS.md) is
-written to protect.
+Local-time conversion happens at point of use in the renderer.
+`evt.StartTimeUtc.ToLocalTime()` per event chip is fine — the runtime
+caches the system `TimeZoneInfo` after the first call, and the per-call
+cost is microseconds (dwarfed by the surrounding `Border` / `TextBlock`
+allocations the chip already pays for).
+
+What is banned:
+
+- **Parallel caches of local times** alongside `_eventsByDate`. Doubles
+  event memory, introduces an invalidation problem when the user crosses
+  a DST boundary with the app open, and buys nothing measurable.
+- **`TimeZoneInfo` lookups or DST math inside per-event loops** — e.g.
+  `TimeZoneInfo.FindSystemTimeZoneById`, manual offset rule construction.
+  `ToLocalTime()` on a UTC `DateTime` is not such a lookup; it reuses
+  the cached system zone.
+
+The earlier "once per render at the view boundary" framing was
+theoretically clean but practically over-strict: the conversion cost
+isn't on any hot path, and forcing a pre-converted projection would
+add per-event allocations or a parallel array for no measurable win,
+working against the small-footprint goal.
 
 ## Provider Strategy
 
@@ -79,9 +94,11 @@ under `Views/`:
   all-day events band (shown only when all-day events exist), and seven day
   content columns built by `TimelineRenderHelper.BuildDayColumnContent` behind a
   single shared gutter from `TimelineRenderHelper.BuildSharedGutter`. Reports
-  day-header taps, empty time-slot double-taps, and event taps back to
-  `MainWindow`. Stateless beyond `_host` — rebuilt on every `Render()` call (no
-  `UpdateSelectedDate`).
+  day-header taps, empty time-slot taps, and event taps back to `MainWindow`.
+  Retains per-day day-number visuals from the last `Render()` so
+  `UpdateSelectedDate` can mutate the previous and new selected-day highlights
+  in place without rebuilding columns, gridlines, chips, or scroll state. Full
+  `Render()` is reserved for range changes (cross-week navigation).
 - `Views/Rendering/DayViewRenderer` — single-day all-day band + scrollable
   24-hour timeline, derived from `_selectedDate`
 - `Views/Rendering/MiniMonthRenderer` — compact sidebar month navigator
@@ -108,6 +125,14 @@ under `Views/`:
   `EventRepository`. Used by Month (double-tap a day), Week and Day (tap an
   empty time slot), the selected-day panel, and the read-only event popover's
   Edit button.
+
+Renderers may retain UI bookkeeping needed for incremental updates —
+references to per-day visuals so a selection change can mutate two
+highlights in place, dictionaries keyed by date, etc. They must not
+retain event data: `_eventsByDate` on `MainWindow` is the single
+source of truth for events (see "Single Event Cache" in Performance
+Philosophy). The distinction is what "stateless renderer" means in
+this codebase: no parallel event cache, not no state at all.
 
 Shared date/color conversions live in `Helpers/` (`DateHelpers`,
 `ColorHelper`) so rendering classes don't duplicate them.
