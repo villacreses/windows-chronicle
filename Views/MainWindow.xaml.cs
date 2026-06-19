@@ -791,9 +791,11 @@ namespace Chronicle
         /// <summary>
         /// Selected-day panel row click: opens the edit popover directly,
         /// bypassing the read-only popover (a deliberate product distinction).
+        /// Anchored to the clicked row so the popover reads as a talk-bubble
+        /// from the row — same pattern as <see cref="OnEventClicked"/>.
         /// </summary>
-        public async void OnEventActivated(Event evt) =>
-            await EditEventAsync(evt, FallbackAnchor);
+        public async void OnEventActivated(Event evt, FrameworkElement anchor) =>
+            await EditEventAsync(evt, anchor);
 
         private async void EventPopover_EditRequested(object? sender, Event evt)
         {

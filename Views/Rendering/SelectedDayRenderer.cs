@@ -143,7 +143,9 @@ internal sealed class SelectedDayRenderer
             Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
             BorderThickness = new Thickness(0)
         };
-        row.Click += (s, e) => interactions.OnEventActivated(capturedEvt);
+        // sender is the row Button itself, so we hand it through as the anchor
+        // for the edit popover — keeps the talk-bubble from the clicked row.
+        row.Click += (s, e) => interactions.OnEventActivated(capturedEvt, (FrameworkElement)s);
 
         return row;
     }

@@ -51,8 +51,13 @@ internal interface ICalendarInteractionHost
     /// <summary>Event chip tap (Month/Week/Day): show read-only popover anchored to <paramref name="anchor"/>.</summary>
     void OnEventClicked(Event evt, FrameworkElement anchor);
 
-    /// <summary>Selected-day panel row click: open edit popover directly.</summary>
-    void OnEventActivated(Event evt);
+    /// <summary>
+    /// Selected-day panel row click: open edit popover directly, anchored to
+    /// <paramref name="anchor"/> (the clicked row) so the editor reads as a
+    /// talk-bubble from the row — same pattern as
+    /// <see cref="OnEventClicked"/>.
+    /// </summary>
+    void OnEventActivated(Event evt, FrameworkElement anchor);
 }
 
 /// <summary>
