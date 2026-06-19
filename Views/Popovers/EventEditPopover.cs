@@ -9,20 +9,26 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
-using Windows.Foundation;
 
 namespace Chronicle.Views.Popovers;
 
 /// <summary>
-/// A light-dismiss create/edit event editor shown in a
-/// <see cref="Flyout"/> anchored to a point in the window (e.g. the clicked
-/// time slot). This is the sole event-editing UI; the previous modal
-/// `EventDialogService` has been removed.
+/// A light-dismiss create/edit event editor shown in a <see cref="Flyout"/>
+/// anchored to a <see cref="FrameworkElement"/> in the calendar surface
+/// (typically the clicked event chip or the day cell / time slot a draft
+/// chip is sitting on). This is the sole event-editing UI; the previous
+/// modal `EventDialogService` has been removed.
 ///
 /// The form is built programmatically (Name, Calendar, Start date+time, End
 /// date+time, Save/Cancel). <see cref="ShowCreateEventAsync"/> /
 /// <see cref="ShowEditEventAsync"/> return the resulting <see cref="Event"/> on
 /// save, or <c>null</c> if the popover is cancelled or light-dismissed.
+///
+/// Placement matches the read-only <see cref="EventPopover"/>
+/// (<see cref="FlyoutPlacementMode.RightEdgeAlignedTop"/>) so the editor reads
+/// as a continuation of the same talk-bubble that the read-only popover
+/// established. Anchoring to a small element (rather than the window content)
+/// also keeps the flyout's light-dismiss capture region off the scrollbar.
 ///
 /// The popover performs no persistence — it only constructs and returns the
 /// <see cref="Event"/>; the caller saves it via the event repository.
@@ -32,21 +38,19 @@ public static class EventEditPopover
     private const double FormWidth = 340;
 
     /// <summary>
-    /// Shows the create-event popover anchored at <paramref name="anchorPoint"/>
-    /// (relative to the window content). The form defaults to
-    /// <paramref name="suggestedStartTime"/> for one hour, the first available
-    /// calendar selected. Returns the new <see cref="Event"/> on save, or
-    /// <c>null</c> if dismissed without saving.
+    /// Shows the create-event popover anchored to <paramref name="anchorElement"/>
+    /// (typically the freshly-rendered draft chip, or the cell / column that
+    /// was tapped). The form defaults to <paramref name="suggestedStartTime"/>
+    /// for one hour, the first available calendar selected. Returns the new
+    /// <see cref="Event"/> on save, or <c>null</c> if dismissed without saving.
     /// </summary>
     public static Task<Event?> ShowCreateEventAsync(
-        Window parentWindow,
-        Point anchorPoint,
+        FrameworkElement anchorElement,
         DateTime suggestedStartTime,
         IList<Calendar> availableCalendars)
     {
         return ShowAsync(
-            parentWindow,
-            anchorPoint,
+            anchorElement,
             heading: "Create Event",
             initialTitle: "",
             initialStartLocal: suggestedStartTime,
@@ -73,21 +77,20 @@ public static class EventEditPopover
     }
 
     /// <summary>
-    /// Shows the edit-event popover anchored at <paramref name="anchorPoint"/>,
-    /// pre-filled from <paramref name="eventToEdit"/>. Fields not on the form
-    /// (Id, Description, IsAllDay, RecurrenceRuleJson, CreatedAtUtc) are
-    /// preserved; <c>UpdatedAtUtc</c> is refreshed. Returns the edited
-    /// <see cref="Event"/> on save, or <c>null</c> if dismissed without saving.
+    /// Shows the edit-event popover anchored to <paramref name="anchorElement"/>
+    /// (typically the event chip the user is editing), pre-filled from
+    /// <paramref name="eventToEdit"/>. Fields not on the form (Id, Description,
+    /// IsAllDay, RecurrenceRuleJson, CreatedAtUtc) are preserved;
+    /// <c>UpdatedAtUtc</c> is refreshed. Returns the edited <see cref="Event"/>
+    /// on save, or <c>null</c> if dismissed without saving.
     /// </summary>
     public static Task<Event?> ShowEditEventAsync(
-        Window parentWindow,
-        Point anchorPoint,
+        FrameworkElement anchorElement,
         Event eventToEdit,
         IList<Calendar> availableCalendars)
     {
         return ShowAsync(
-            parentWindow,
-            anchorPoint,
+            anchorElement,
             heading: "Edit Event",
             initialTitle: eventToEdit.Title,
             initialStartLocal: eventToEdit.StartTimeUtc.ToLocalTime(),
@@ -119,8 +122,7 @@ public static class EventEditPopover
     /// edit-flavored <see cref="Event"/>.
     /// </summary>
     private static Task<Event?> ShowAsync(
-        Window parentWindow,
-        Point anchorPoint,
+        FrameworkElement anchorElement,
         string heading,
         string initialTitle,
         DateTime initialStartLocal,
@@ -130,14 +132,6 @@ public static class EventEditPopover
         Func<string, Guid, DateTime, DateTime, Event> buildEvent)
     {
         var tcs = new TaskCompletionSource<Event?>();
-
-        // The flyout needs a FrameworkElement to anchor to; the window's content
-        // root is the natural choice, with the click point as the position.
-        if (parentWindow.Content is not FrameworkElement anchorElement)
-        {
-            tcs.SetResult(null);
-            return tcs.Task;
-        }
 
         var root = new StackPanel
         {
@@ -224,7 +218,15 @@ public static class EventEditPopover
         buttonRow.Children.Add(cancelButton);
         root.Children.Add(buttonRow);
 
-        var flyout = new Flyout { Content = root };
+        // RightEdgeAlignedTop matches the read-only EventPopover so the editor
+        // feels like a continuation of the same talk-bubble that the read-only
+        // popover established. Anchoring to a small element (not Content) also
+        // keeps the flyout's light-dismiss capture region off the scrollbar.
+        var flyout = new Flyout
+        {
+            Content = root,
+            Placement = FlyoutPlacementMode.RightEdgeAlignedTop
+        };
 
         saveButton.Click += (s, e) =>
         {
@@ -248,11 +250,7 @@ public static class EventEditPopover
         // Light-dismiss (clicking outside) closes the flyout without a save.
         flyout.Closed += (s, e) => tcs.TrySetResult(null);
 
-        flyout.ShowAt(anchorElement, new FlyoutShowOptions
-        {
-            Position = anchorPoint,
-            Placement = FlyoutPlacementMode.Auto
-        });
+        flyout.ShowAt(anchorElement);
 
         return tcs.Task;
     }

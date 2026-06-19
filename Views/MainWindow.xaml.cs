@@ -11,7 +11,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
-using Windows.Foundation;
 
 namespace Chronicle
 {
@@ -426,14 +425,19 @@ namespace Chronicle
         // ── Event create / edit popovers ──────────────────────────────────────
 
         /// <summary>
-        /// Window-center anchor for the event popovers. Positions are relative to
-        /// the window content. A precise per-interaction anchor can replace this
-        /// later; centering is good enough and keeps callbacks simple.
+        /// The most recently tapped event chip, captured in
+        /// <see cref="OnEventClicked"/>. <see cref="EventPopover_EditRequested"/>
+        /// reuses it as the anchor for the edit popover so the editor opens as
+        /// a continuation of the read-only popover's talk-bubble.
         /// </summary>
-        private Point WindowCenterAnchor()
-            => Content is FrameworkElement root
-                ? new Point(root.ActualWidth / 2, root.ActualHeight / 2)
-                : new Point(0, 0);
+        private FrameworkElement? _lastEventAnchor;
+
+        /// <summary>
+        /// Fallback anchor when no chip is available (selected-day panel rows,
+        /// create flows before the draft chip element is exposed by renderers).
+        /// </summary>
+        private FrameworkElement FallbackAnchor =>
+            Content as FrameworkElement ?? throw new InvalidOperationException("Window has no content root.");
 
         /// <summary>
         /// Opens the create-event popover for <paramref name="dayDate"/> at
@@ -458,8 +462,12 @@ namespace Chronicle
             Event? created;
             try
             {
+                // Create flows don't yet expose the freshly-rendered draft chip
+                // back to MainWindow, so the popover falls back to the window
+                // content root. Edit gets a precise chip anchor — see
+                // EventPopover_EditRequested.
                 created = await EventEditPopover.ShowCreateEventAsync(
-                    this, WindowCenterAnchor(), suggestedStartLocal, _allCalendars);
+                    FallbackAnchor, suggestedStartLocal, _allCalendars);
             }
             finally
             {
@@ -557,13 +565,16 @@ namespace Chronicle
         }
 
         /// <summary>
-        /// Opens the edit-event popover for <paramref name="evt"/>; on save,
-        /// updates the event and refreshes the active view. No-op if dismissed.
+        /// Opens the edit-event popover for <paramref name="evt"/>, anchored to
+        /// <paramref name="anchor"/> (typically the event chip the user is
+        /// editing — captured in <see cref="OnEventClicked"/> and threaded
+        /// through <see cref="EventPopover_EditRequested"/>). On save, updates
+        /// the event and refreshes the active view. No-op if dismissed.
         /// </summary>
-        private async Task EditEventAsync(Event evt)
+        private async Task EditEventAsync(Event evt, FrameworkElement anchor)
         {
             var edited = await EventEditPopover.ShowEditEventAsync(
-                this, WindowCenterAnchor(), evt, _allCalendars);
+                anchor, evt, _allCalendars);
             if (edited is null)
                 return;
 
@@ -706,6 +717,10 @@ namespace Chronicle
         /// </summary>
         public void OnEventClicked(Event evt, FrameworkElement anchor)
         {
+            // Remember the chip so EventPopover_EditRequested can hand it to
+            // the edit popover — the editor reads as a continuation of the same
+            // talk-bubble the read-only popover opened.
+            _lastEventAnchor = anchor;
             var calendar = _allCalendars.FirstOrDefault(c => c.Id == evt.CalendarId);
             _eventPopover.SetEvent(evt, calendar);
             _eventPopoverFlyout.ShowAt(anchor);
@@ -715,12 +730,13 @@ namespace Chronicle
         /// Selected-day panel row click: opens the edit popover directly,
         /// bypassing the read-only popover (a deliberate product distinction).
         /// </summary>
-        public async void OnEventActivated(Event evt) => await EditEventAsync(evt);
+        public async void OnEventActivated(Event evt) =>
+            await EditEventAsync(evt, FallbackAnchor);
 
         private async void EventPopover_EditRequested(object? sender, Event evt)
         {
             _eventPopoverFlyout.Hide();
-            await EditEventAsync(evt);
+            await EditEventAsync(evt, _lastEventAnchor ?? FallbackAnchor);
         }
 
         private async void EventPopover_DeleteRequested(object? sender, Event evt)
