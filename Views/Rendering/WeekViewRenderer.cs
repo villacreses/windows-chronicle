@@ -31,6 +31,12 @@ namespace Chronicle.Views.Rendering;
 ///   can mutate the previous and new selected-day highlights in place without
 ///   rebuilding columns, gridlines, chips, or scroll state. Full
 ///   <see cref="Render"/> is reserved for range changes (cross-week navigation).</item>
+///   <item>Holds the timeline <see cref="ScrollViewer"/> as a persistent
+///   field — created on first <see cref="Render"/>, reused thereafter. Only
+///   its <see cref="ScrollViewer.Content"/> is swapped on subsequent renders,
+///   so <see cref="ScrollViewer.VerticalOffset"/> survives draft-chip
+///   show/hide, save, cancel, and visibility-toggle refreshes. The renderer
+///   never moves the scroll position; the user's offset is preserved as-is.</item>
 /// </list>
 ///
 /// Colors from <see cref="Theme"/>; shared visuals from
@@ -46,6 +52,12 @@ internal sealed class WeekViewRenderer
     // see the "Bounded Visuals Are Reused" guardrail in ARCHITECTURE.md.
     private readonly Dictionary<DateTime, Border> _dayNumberCircles = new();
     private readonly Dictionary<DateTime, TextBlock> _dayNumberBlocks = new();
+
+    // Persistent visuals created on first Render() and reused thereafter.
+    // Keeping the ScrollViewer instance is what preserves the user's scroll
+    // offset across re-renders — a fresh ScrollViewer would start at 0.
+    private ScrollViewer? _scroll;
+    private FrameworkElement? _topSection;
 
     private DateTime _selectedDate;
 
@@ -74,16 +86,37 @@ internal sealed class WeekViewRenderer
         _dayNumberCircles.Clear();
         _dayNumberBlocks.Clear();
 
-        _host.Children.Clear();
-        _host.ColumnDefinitions.Clear();
-        _host.RowDefinitions.Clear();
-        _host.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        _host.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-
         var weekDays = DateHelpers.BuildWeek(selectedDate);
         var today = DateHelpers.GetLocalDayKey(DateTime.Now);
 
-        // Row 0: sticky top section — day headers + optional all-day band.
+        // First-time init: lay out the host (Auto row + Star row) and add the
+        // persistent ScrollViewer. After this, _scroll stays in _host.Children
+        // for the lifetime of the renderer so its VerticalOffset survives
+        // every subsequent Render().
+        if (_scroll is null)
+        {
+            _host.Children.Clear();
+            _host.ColumnDefinitions.Clear();
+            _host.RowDefinitions.Clear();
+            _host.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            _host.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+
+            _scroll = new ScrollViewer
+            {
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
+            };
+            Grid.SetRow(_scroll, 1);
+            _host.Children.Add(_scroll);
+        }
+
+        // Row 0: replace the top section — day headers + optional all-day band.
+        // Always rebuilt because the headers carry per-render selection /
+        // today highlights and the all-day band's contents depend on events.
+        // The ScrollViewer below is untouched, so its scroll position holds.
+        if (_topSection is not null)
+            _host.Children.Remove(_topSection);
+
         var topSection = new StackPanel { Orientation = Orientation.Vertical };
         topSection.Children.Add(BuildDayHeaders(weekDays, today, _selectedDate));
         if (showAllDayBand)
@@ -94,32 +127,12 @@ internal sealed class WeekViewRenderer
         }
         Grid.SetRow(topSection, 0);
         _host.Children.Add(topSection);
+        _topSection = topSection;
 
-        // Row 1: scrollable 7-column timeline.
-        var timelinesGrid = BuildTimelinesGrid(weekDays, eventsByDate, calendars, _interactions);
-
-        // Auto-scroll to ~7am, or earlier if the first timed event across the
-        // whole week starts before then.
-        var allTimed = weekDays
-            .SelectMany(d => eventsByDate.GetValueOrDefault(DateHelpers.GetLocalDayKey(d)) ?? new List<Event>())
-            .Where(e => !e.IsAllDay)
-            .ToList();
-        double targetHour = 7;
-        if (allTimed.Count > 0)
-            targetHour = Math.Min(targetHour, allTimed.Min(e => e.StartTimeUtc.ToLocalTime().Hour));
-
-        var scroll = new ScrollViewer
-        {
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            Content = timelinesGrid
-        };
-        var targetY = Math.Max(0, targetHour) * TimelineRenderHelper.HourHeight;
-        scroll.DispatcherQueue.TryEnqueue(() =>
-            scroll.ChangeView(null, targetY, null, disableAnimation: true));
-
-        Grid.SetRow(scroll, 1);
-        _host.Children.Add(scroll);
+        // Swap the timelines into the persistent ScrollViewer. Setting Content
+        // doesn't reset VerticalOffset; the user stays where they were
+        // looking. No programmatic scroll ever.
+        _scroll.Content = BuildTimelinesGrid(weekDays, eventsByDate, calendars, _interactions);
     }
 
     /// <summary>
