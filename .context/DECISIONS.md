@@ -205,6 +205,35 @@ stronger no.
 
 ---
 
+## Bulk DB Writes Use an Explicit Transaction
+
+SQLite auto-commits each statement when no explicit transaction is open,
+which means one `fsync` per write. For small per-call writes (event
+create/edit/delete from the UI) this is correct and the cost is
+negligible. For bulk writes it is the difference between "fast" and
+"unusable."
+
+Rule:
+
+- ≤ ~10 records: one repo-method call per record is acceptable.
+- More than that: open a single `SqliteTransaction`, do all the writes,
+  commit. Either inside a dedicated bulk repo method or at the call
+  site — both are fine.
+
+The constraint is being written down now because no caller exercises
+it yet. The first real bulk-write workload — OAuth provider sync,
+pulling N remote events down on initial connect or a refresh — will
+otherwise default to the per-call shape and ship slow with no obvious
+culprit. The lesson is much cheaper to read than to learn live.
+
+Composes with the Idle Cost Budget: sync work is expected to be
+batched and explicitly scheduled (see "Background work is opt-in,
+not ambient" — rain-checked but on the radar), and unbatched writes
+violate the spirit of that constraint even when fired inside an
+opt-in window.
+
+---
+
 ## PR Perf-Impact Line
 
 Any PR that touches a renderer or a repository includes a one-line

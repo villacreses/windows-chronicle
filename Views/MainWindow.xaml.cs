@@ -53,6 +53,16 @@ namespace Chronicle
         // Seeded to true for every calendar; resets on app restart (by design).
         private Dictionary<Guid, bool> _calendarVisibility = new();
 
+        // Raw events for the currently loaded range, before the visibility
+        // filter. _eventsByDate is derived from this plus _calendarVisibility;
+        // visibility toggles re-filter without going to the DB. The loaded
+        // range tracks what the cache covers so EnsureEventsLoadedAsync can
+        // skip the query when the active view's range fits inside it (e.g.,
+        // switching Month → Week → Day in place).
+        private List<Event> _loadedEvents = new();
+        private DateTime _loadedRangeStartUtc = DateTime.MaxValue;
+        private DateTime _loadedRangeEndUtc = DateTime.MinValue;
+
         private Dictionary<DateTime, List<Event>> _eventsByDate = new();
 
         public MainWindow()
@@ -114,8 +124,12 @@ namespace Chronicle
         /// <summary>
         /// Reloads calendars from storage, reconciles the visibility map
         /// (new calendars default to visible; deleted ones are dropped),
-        /// re-renders the sidebar, and refreshes the month views. Used at
+        /// re-renders the sidebar, and refreshes the active view. Used at
         /// startup and after any create/edit/delete calendar operation.
+        ///
+        /// Invalidates the event cache because calendar delete cascade-deletes
+        /// events (see DECISIONS.md). Create/edit don't change events but the
+        /// extra query is cheap and not worth special-casing.
         /// </summary>
         private async Task ReloadCalendarsAndRefreshAsync()
         {
@@ -129,6 +143,7 @@ namespace Chronicle
                 _calendarVisibility.Remove(staleId);
 
             RenderSidebar();
+            InvalidateLoadedEvents();
             await RefreshActiveViewAsync();
         }
 
@@ -296,10 +311,13 @@ namespace Chronicle
 
         // ── ISidebarHost ──────────────────────────────────────────────────────
 
-        public async void OnCalendarVisibilityToggled(Guid calendarId, bool isVisible)
+        public void OnCalendarVisibilityToggled(Guid calendarId, bool isVisible)
         {
             _calendarVisibility[calendarId] = isVisible;
-            await RefreshActiveViewAsync();
+            // Visibility is a client-side filter over the already-loaded events.
+            // Re-filter and re-render — never hit the DB for a checkbox click.
+            ApplyVisibilityFilter();
+            RerenderActiveView();
         }
 
         public async void OnAddCalendar()
@@ -451,6 +469,7 @@ namespace Chronicle
             if (created is not null)
             {
                 await _eventRepository.InsertAsync(created);
+                InvalidateLoadedEvents();
                 await RefreshActiveViewAsync();
             }
             else
@@ -549,34 +568,84 @@ namespace Chronicle
                 return;
 
             await _eventRepository.UpdateAsync(edited);
+            InvalidateLoadedEvents();
             await RefreshActiveViewAsync();
         }
 
         // ── Event loading ─────────────────────────────────────────────────────
 
-        private async Task LoadEventsAsync()
-        {
-            // Same pipeline for every view; only the queried range differs.
-            // Week/Day derive their range from _selectedDate (and can straddle a
-            // month boundary); Month uses _displayMonth.
-            var (rangeStart, rangeEnd) = _currentView switch
+        /// <summary>
+        /// The UTC range the active view needs to cover. Week/Day derive their
+        /// range from <see cref="_selectedDate"/> (and can straddle a month
+        /// boundary); Month uses <see cref="_displayMonth"/>.
+        /// </summary>
+        private (DateTime startUtc, DateTime endUtc) GetActiveViewRangeUtc() =>
+            _currentView switch
             {
                 CalendarView.Week => DateHelpers.GetWeekRangeUtc(_selectedDate),
                 CalendarView.Day => DateHelpers.GetDayRangeUtc(_selectedDate),
                 _ => DateHelpers.GetMonthRangeUtc(_displayMonth)
             };
 
-            var events = await _eventRepository.GetInRangeAsync(rangeStart, rangeEnd);
+        /// <summary>
+        /// Full event-pipeline pass: query the DB if the cache doesn't cover
+        /// the active view's range, then re-apply the visibility filter into
+        /// <see cref="_eventsByDate"/>. Use after any change that invalidates
+        /// the cache (navigation across the loaded range, event CRUD, calendar
+        /// delete). UI-only changes (view switch, visibility toggle) should
+        /// call the narrower helpers directly so they don't touch the DB.
+        /// </summary>
+        private async Task LoadEventsAsync()
+        {
+            await EnsureEventsLoadedAsync();
+            ApplyVisibilityFilter();
+        }
 
-            // Filter to calendars that are currently visible.
+        /// <summary>
+        /// Queries the DB for the active view's range only when the existing
+        /// cache doesn't already cover it. View switches that stay inside the
+        /// loaded range (Month → Week, Week → Day, etc.) short-circuit.
+        /// </summary>
+        private async Task EnsureEventsLoadedAsync()
+        {
+            var (rangeStart, rangeEnd) = GetActiveViewRangeUtc();
+
+            if (rangeStart >= _loadedRangeStartUtc && rangeEnd <= _loadedRangeEndUtc)
+                return;
+
+            _loadedEvents = await _eventRepository.GetInRangeAsync(rangeStart, rangeEnd);
+            _loadedRangeStartUtc = rangeStart;
+            _loadedRangeEndUtc = rangeEnd;
+        }
+
+        /// <summary>
+        /// Rebuilds <see cref="_eventsByDate"/> by re-filtering
+        /// <see cref="_loadedEvents"/> through <see cref="_calendarVisibility"/>.
+        /// Pure — no DB. Called from the calendar-visibility toggle path so a
+        /// checkbox click never round-trips storage.
+        /// </summary>
+        private void ApplyVisibilityFilter()
+        {
             // If _calendarVisibility is empty (no calendars), everything passes through.
-            var visible = events
+            var visible = _loadedEvents
                 .Where(e => _calendarVisibility.Count == 0
                             || _calendarVisibility.GetValueOrDefault(e.CalendarId, true));
 
             _eventsByDate = visible
                 .GroupBy(e => DateHelpers.GetEventDayKey(e.StartTimeUtc))
                 .ToDictionary(g => g.Key, g => g.ToList());
+        }
+
+        /// <summary>
+        /// Invalidates the event cache so the next
+        /// <see cref="EnsureEventsLoadedAsync"/> call goes to the DB. Used by
+        /// CRUD paths (event create/edit/delete, calendar delete) where the
+        /// loaded events on disk no longer match what's in memory.
+        /// </summary>
+        private void InvalidateLoadedEvents()
+        {
+            _loadedRangeStartUtc = DateTime.MaxValue;
+            _loadedRangeEndUtc = DateTime.MinValue;
         }
 
         // ── Calendar grid rendering ───────────────────────────────────────────
@@ -661,6 +730,7 @@ namespace Chronicle
             try
             {
                 await _eventRepository.DeleteAsync(evt.Id);
+                InvalidateLoadedEvents();
                 await RefreshActiveViewAsync();
             }
             catch (Exception ex)
