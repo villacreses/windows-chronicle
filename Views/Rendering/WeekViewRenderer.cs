@@ -1,6 +1,7 @@
 using Chronicle.Helpers;
 using Chronicle.Models;
 using Microsoft.UI.Text;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
@@ -108,6 +109,17 @@ internal sealed class WeekViewRenderer
             };
             Grid.SetRow(_scroll, 1);
             _host.Children.Add(_scroll);
+
+            // One-shot starting offset: seed the scroll to ~7am on first mount
+            // so the user lands at a sensible time of day instead of midnight.
+            // Deferred to Low priority so the first Content swap below has been
+            // measured/arranged before ChangeView runs (calling it before layout
+            // silently no-ops). After this, the renderer never moves the scroll
+            // position again — subsequent Render() calls only swap Content and
+            // VerticalOffset is preserved.
+            var scroll = _scroll;
+            scroll.DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, () =>
+                scroll.ChangeView(null, 7 * TimelineRenderHelper.HourHeight, null, disableAnimation: true));
         }
 
         // Row 0: replace the top section — day headers + optional all-day band.
