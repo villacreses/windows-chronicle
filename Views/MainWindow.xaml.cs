@@ -4,14 +4,15 @@ using Chronicle.Models;
 using Chronicle.Views.Dialogs;
 using Chronicle.Views.Popovers;
 using Chronicle.Views.Rendering;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
+using Microsoft.UI.Xaml.Media;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
-using Windows.Foundation;
 
 namespace Chronicle
 {
@@ -426,14 +427,77 @@ namespace Chronicle
         // ── Event create / edit popovers ──────────────────────────────────────
 
         /// <summary>
-        /// Window-center anchor for the event popovers. Positions are relative to
-        /// the window content. A precise per-interaction anchor can replace this
-        /// later; centering is good enough and keeps callbacks simple.
+        /// The most recently tapped event chip, captured in
+        /// <see cref="OnEventClicked"/>. <see cref="EventPopover_EditRequested"/>
+        /// reuses it as the anchor for the edit popover so the editor opens as
+        /// a continuation of the read-only popover's talk-bubble.
         /// </summary>
-        private Point WindowCenterAnchor()
-            => Content is FrameworkElement root
-                ? new Point(root.ActualWidth / 2, root.ActualHeight / 2)
-                : new Point(0, 0);
+        private FrameworkElement? _lastEventAnchor;
+
+        /// <summary>
+        /// Fallback anchor when no chip is available (selected-day panel rows).
+        /// </summary>
+        private FrameworkElement FallbackAnchor =>
+            Content as FrameworkElement ?? throw new InvalidOperationException("Window has no content root.");
+
+        /// <summary>
+        /// The active main view's root container — the subtree the draft chip
+        /// lives in for the current view. Used as both the scan root for
+        /// <see cref="FindChipForEventAsync"/> and the secondary anchor when the
+        /// chip can't be located (defensive; a re-rendered draft should always
+        /// be findable).
+        /// </summary>
+        private FrameworkElement ActiveViewRoot => _currentView switch
+        {
+            CalendarView.Week => WeekViewRoot,
+            CalendarView.Day => DayViewRoot,
+            _ => MonthViewRoot
+        };
+
+        /// <summary>
+        /// Locates the chip whose <see cref="EventTapTarget"/> matches
+        /// <paramref name="eventId"/> in the active view's subtree, deferring
+        /// until layout has settled so Month View's <c>SizeChanged</c>-driven
+        /// chip insertion has run. Week/Day timelines insert chips
+        /// synchronously, so the deferral is a no-op there but keeps a single
+        /// code path for both.
+        /// </summary>
+        private Task<FrameworkElement?> FindChipForEventAsync(Guid eventId)
+        {
+            var tcs = new TaskCompletionSource<FrameworkElement?>();
+            // Low priority queues behind any pending layout/render work, so
+            // Month View's deferred FillEventsArea has inserted its chips by
+            // the time we walk the tree.
+            DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, () =>
+                tcs.SetResult(FindChipForEvent(ActiveViewRoot, eventId)));
+            return tcs.Task;
+        }
+
+        /// <summary>
+        /// Depth-first scan for a <see cref="FrameworkElement"/> whose
+        /// <see cref="FrameworkElement.Tag"/> carries an
+        /// <see cref="EventTapTarget"/> for <paramref name="eventId"/>.
+        /// Both event chips and timeline event blocks tag themselves this way
+        /// (see <see cref="CalendarRenderHelper.CreateEventChip"/> and
+        /// <see cref="TimelineRenderHelper"/>), so one walker covers Month,
+        /// Week, and Day.
+        /// </summary>
+        private static FrameworkElement? FindChipForEvent(DependencyObject root, Guid eventId)
+        {
+            int count = VisualTreeHelper.GetChildrenCount(root);
+            for (int i = 0; i < count; i++)
+            {
+                var child = VisualTreeHelper.GetChild(root, i);
+                if (child is FrameworkElement fe
+                    && fe.Tag is EventTapTarget t
+                    && t.Event.Id == eventId)
+                    return fe;
+                var found = FindChipForEvent(child, eventId);
+                if (found is not null)
+                    return found;
+            }
+            return null;
+        }
 
         /// <summary>
         /// Opens the create-event popover for <paramref name="dayDate"/> at
@@ -455,11 +519,17 @@ namespace Chronicle
             InsertDraft(draft);
             RerenderActiveView();
 
+            // Anchor the create popover to the freshly-rendered draft chip so
+            // it reads the same as the edit popover (anchored to its event
+            // chip) — uniform talk-bubble behavior across both flows. Falls
+            // back to the active view root if the chip can't be located.
+            var anchor = await FindChipForEventAsync(draft.Id) ?? ActiveViewRoot;
+
             Event? created;
             try
             {
                 created = await EventEditPopover.ShowCreateEventAsync(
-                    this, WindowCenterAnchor(), suggestedStartLocal, _allCalendars);
+                    anchor, suggestedStartLocal, _allCalendars);
             }
             finally
             {
@@ -557,13 +627,16 @@ namespace Chronicle
         }
 
         /// <summary>
-        /// Opens the edit-event popover for <paramref name="evt"/>; on save,
-        /// updates the event and refreshes the active view. No-op if dismissed.
+        /// Opens the edit-event popover for <paramref name="evt"/>, anchored to
+        /// <paramref name="anchor"/> (typically the event chip the user is
+        /// editing — captured in <see cref="OnEventClicked"/> and threaded
+        /// through <see cref="EventPopover_EditRequested"/>). On save, updates
+        /// the event and refreshes the active view. No-op if dismissed.
         /// </summary>
-        private async Task EditEventAsync(Event evt)
+        private async Task EditEventAsync(Event evt, FrameworkElement anchor)
         {
             var edited = await EventEditPopover.ShowEditEventAsync(
-                this, WindowCenterAnchor(), evt, _allCalendars);
+                anchor, evt, _allCalendars);
             if (edited is null)
                 return;
 
@@ -706,6 +779,10 @@ namespace Chronicle
         /// </summary>
         public void OnEventClicked(Event evt, FrameworkElement anchor)
         {
+            // Remember the chip so EventPopover_EditRequested can hand it to
+            // the edit popover — the editor reads as a continuation of the same
+            // talk-bubble the read-only popover opened.
+            _lastEventAnchor = anchor;
             var calendar = _allCalendars.FirstOrDefault(c => c.Id == evt.CalendarId);
             _eventPopover.SetEvent(evt, calendar);
             _eventPopoverFlyout.ShowAt(anchor);
@@ -714,13 +791,16 @@ namespace Chronicle
         /// <summary>
         /// Selected-day panel row click: opens the edit popover directly,
         /// bypassing the read-only popover (a deliberate product distinction).
+        /// Anchored to the clicked row so the popover reads as a talk-bubble
+        /// from the row — same pattern as <see cref="OnEventClicked"/>.
         /// </summary>
-        public async void OnEventActivated(Event evt) => await EditEventAsync(evt);
+        public async void OnEventActivated(Event evt, FrameworkElement anchor) =>
+            await EditEventAsync(evt, anchor);
 
         private async void EventPopover_EditRequested(object? sender, Event evt)
         {
             _eventPopoverFlyout.Hide();
-            await EditEventAsync(evt);
+            await EditEventAsync(evt, _lastEventAnchor ?? FallbackAnchor);
         }
 
         private async void EventPopover_DeleteRequested(object? sender, Event evt)

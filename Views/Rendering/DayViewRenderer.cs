@@ -1,5 +1,6 @@
 using Chronicle.Helpers;
 using Chronicle.Models;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
@@ -17,7 +18,12 @@ namespace Chronicle.Views.Rendering;
 /// <list type="bullet">
 ///   <item>Owns the day's <i>layout</i> — splits the host into an all-day band
 ///   (shown only when the day has all-day events) and a scrollable timeline
-///   row, auto-scrolled to ~7am or the first event on load.</item>
+///   row. The <see cref="ScrollViewer"/> is held as a persistent field —
+///   created on first <see cref="Render"/>, reused thereafter. Only its
+///   <see cref="ScrollViewer.Content"/> is swapped on subsequent renders, so
+///   <see cref="ScrollViewer.VerticalOffset"/> survives every refresh. The
+///   renderer never moves the scroll position; the user's offset is preserved
+///   as-is.</item>
 ///   <item>Renders the all-day band directly (label + event chips).</item>
 ///   <item>Delegates the 24-hour timeline to
 ///   <see cref="TimelineRenderHelper.BuildDayTimeline"/>: gutter, gridlines,
@@ -35,6 +41,12 @@ internal sealed class DayViewRenderer
     private readonly Grid _host;
     private readonly ICalendarInteractionHost _interactions;
 
+    // Persistent visuals created on first Render() and reused thereafter.
+    // Keeping the ScrollViewer instance is what preserves the user's scroll
+    // offset across re-renders — a fresh ScrollViewer would start at 0.
+    private ScrollViewer? _scroll;
+    private Border? _allDayBand;
+
     public DayViewRenderer(Grid host, ICalendarInteractionHost interactions)
     {
         _host = host;
@@ -51,43 +63,68 @@ internal sealed class DayViewRenderer
         List<Event> dayEvents,
         List<Calendar> calendars)
     {
-        _host.Children.Clear();
-        _host.ColumnDefinitions.Clear();
-        _host.RowDefinitions.Clear();
-        _host.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        _host.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-
         var allDay = dayEvents.Where(e => e.IsAllDay).ToList();
         var timed = dayEvents.Where(e => !e.IsAllDay).ToList();
 
+        // First-time init: lay out the host (Auto row + Star row) and add the
+        // persistent ScrollViewer. After this, _scroll stays in _host.Children
+        // for the lifetime of the renderer so its VerticalOffset survives
+        // every subsequent Render().
+        if (_scroll is null)
+        {
+            _host.Children.Clear();
+            _host.ColumnDefinitions.Clear();
+            _host.RowDefinitions.Clear();
+            _host.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            _host.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+
+            _scroll = new ScrollViewer
+            {
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
+            };
+            Grid.SetRow(_scroll, 1);
+            _host.Children.Add(_scroll);
+
+            // One-shot starting offset: seed the scroll to ~7am on first mount
+            // so the user lands at a sensible time of day instead of midnight.
+            // Deferred to Low priority so the first Content swap below has been
+            // measured/arranged before ChangeView runs (calling it before layout
+            // silently no-ops). After this, the renderer never moves the scroll
+            // position again — subsequent Render() calls only swap Content and
+            // VerticalOffset is preserved.
+            var scroll = _scroll;
+            scroll.DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, () =>
+                scroll.ChangeView(null, 7 * TimelineRenderHelper.HourHeight, null, disableAnimation: true));
+        }
+
+        // Row 0: replace the all-day band. The band is conditional — present
+        // only when the day has all-day events — so we may add, remove, or
+        // swap it across renders. The ScrollViewer below is untouched, so its
+        // scroll position holds.
+        if (_allDayBand is not null)
+        {
+            _host.Children.Remove(_allDayBand);
+            _allDayBand = null;
+        }
         if (allDay.Count > 0)
         {
             var band = BuildAllDayBand(allDay, calendars, _interactions);
             Grid.SetRow(band, 0);
             _host.Children.Add(band);
+            _allDayBand = band;
         }
 
-        var scroll = new ScrollViewer
-        {
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            Content = TimelineRenderHelper.BuildDayTimeline(
-                selectedDate,
-                timed,
-                calendars,
-                TimeZoneInfo.Local,
-                _interactions,
-                time => _interactions.OnTimeSlotCreateRequested(selectedDate, time))
-        };
-        Grid.SetRow(scroll, 1);
-        _host.Children.Add(scroll);
-
-        // Auto-scroll to ~7am, or earlier if the first event starts before then.
-        double targetHour = 7;
-        if (timed.Count > 0)
-            targetHour = Math.Min(targetHour, timed.Min(e => e.StartTimeUtc.ToLocalTime().Hour));
-        var targetY = Math.Max(0, targetHour) * TimelineRenderHelper.HourHeight;
-        scroll.DispatcherQueue.TryEnqueue(() => scroll.ChangeView(null, targetY, null, disableAnimation: true));
+        // Swap the timeline into the persistent ScrollViewer. Setting Content
+        // doesn't reset VerticalOffset; the user stays where they were
+        // looking. No programmatic scroll ever.
+        _scroll.Content = TimelineRenderHelper.BuildDayTimeline(
+            selectedDate,
+            timed,
+            calendars,
+            TimeZoneInfo.Local,
+            _interactions,
+            time => _interactions.OnTimeSlotCreateRequested(selectedDate, time));
     }
 
     // ── All-day band ──────────────────────────────────────────────────────
