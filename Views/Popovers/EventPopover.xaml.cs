@@ -87,7 +87,17 @@ public sealed partial class EventPopover : UserControl
         if (_currentEvent is null)
             return;
 
-        // Two-step confirmation before delete.
+        // Recurring events (occurrences in this popover — masters never
+        // enter `_eventsByDate`) skip the two-step. The host shows a scope
+        // dialog (Skip this occurrence / Delete entire series), which is
+        // its own confirmation surface.
+        if (_currentEvent.IsOccurrence)
+        {
+            DeleteRequested?.Invoke(this, _currentEvent);
+            return;
+        }
+
+        // Non-recurring: two-step confirmation.
         if (!_deleteConfirmationRequested)
         {
             _deleteConfirmationRequested = true;

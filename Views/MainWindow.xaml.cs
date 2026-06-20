@@ -66,10 +66,15 @@ namespace Chronicle
         // re-expanding. The loaded range tracks what the cache covers so
         // EnsureEventsLoadedAsync can skip the query when the active view's
         // range fits inside it (e.g., switching Month → Week → Day in place).
-        private List<Event> _loadedEvents = new();
+        private List<Event> _projectedEvents = new();
         private DateTime _loadedRangeStartUtc = DateTime.MaxValue;
         private DateTime _loadedRangeEndUtc = DateTime.MinValue;
 
+        // Render-time projection cache (per the recurrence model in
+        // DECISIONS.md): the day-grouped view of `_projectedEvents` after
+        // visibility filtering. Never an identity source — UI state that
+        // needs to remember a selection across reloads must hold an
+        // `EventKey`, not a dictionary slot or list index.
         private Dictionary<DateTime, List<Event>> _eventsByDate = new();
 
         public MainWindow()
@@ -677,9 +682,28 @@ namespace Chronicle
         /// </summary>
         private async Task EditEventAsync(Event evt, FrameworkElement naturalAnchor)
         {
+            // The editor only sees masters (and standalones). If the user
+            // clicked an occurrence chip, fetch its master row from the DB
+            // and pass that — Phase 1 scope is "edit entire series", and the
+            // popover's banner makes that explicit. Phase 2 will introduce
+            // the scope picker that branches into EventOverride writes.
+            var target = evt.IsOccurrence
+                ? await _eventRepository.GetByIdAsync(evt.Id)
+                : evt;
+
+            if (target is null)
+            {
+                // Master vanished between expansion and the click (e.g.
+                // deleted in another flow). Nothing to edit; refresh so the
+                // stale projection drops.
+                InvalidateLoadedEvents();
+                await RefreshActiveViewAsync();
+                return;
+            }
+
             var (anchor, placement) = ResolvePopoverAnchor(naturalAnchor);
             var edited = await EventEditPopover.ShowEditEventAsync(
-                anchor, evt, _allCalendars, placement);
+                anchor, target, _allCalendars, placement);
             if (edited is null)
                 return;
 
@@ -730,7 +754,7 @@ namespace Chronicle
                 return;
 
             var rows = await _eventRepository.GetInRangeAsync(rangeStart, rangeEnd);
-            _loadedEvents = ExpandRecurrences(rows, rangeStart, rangeEnd);
+            _projectedEvents = ExpandRecurrences(rows, rangeStart, rangeEnd);
             _loadedRangeStartUtc = rangeStart;
             _loadedRangeEndUtc = rangeEnd;
         }
@@ -771,14 +795,14 @@ namespace Chronicle
 
         /// <summary>
         /// Rebuilds <see cref="_eventsByDate"/> by re-filtering
-        /// <see cref="_loadedEvents"/> through <see cref="_calendarVisibility"/>.
+        /// <see cref="_projectedEvents"/> through <see cref="_calendarVisibility"/>.
         /// Pure — no DB. Called from the calendar-visibility toggle path so a
         /// checkbox click never round-trips storage.
         /// </summary>
         private void ApplyVisibilityFilter()
         {
             // If _calendarVisibility is empty (no calendars), everything passes through.
-            var visible = _loadedEvents
+            var visible = _projectedEvents
                 .Where(e => _calendarVisibility.Count == 0
                             || _calendarVisibility.GetValueOrDefault(e.CalendarId, true));
 
@@ -893,7 +917,11 @@ namespace Chronicle
 
             try
             {
-                await _eventRepository.DeleteAsync(evt.Id);
+                if (evt.IsOccurrence)
+                    await DeleteOccurrenceAsync(evt);
+                else
+                    await _eventRepository.DeleteAsync(evt.Id);
+
                 InvalidateLoadedEvents();
                 await RefreshActiveViewAsync();
             }
@@ -902,6 +930,68 @@ namespace Chronicle
                 System.Diagnostics.Debug.WriteLine(
                     $"Error deleting event: {ex.Message}\n{ex.StackTrace}");
             }
+        }
+
+        /// <summary>
+        /// Recurring-event delete: presents a scope dialog (Skip this
+        /// occurrence / Delete entire series). "Skip" loads the master,
+        /// appends the occurrence's <c>SeriesAnchorUtc</c> to its EXDATE
+        /// list, and writes the master back — a hole in the projection
+        /// space, no occurrence ever persisted (per DECISIONS.md). "Delete
+        /// series" falls through to the existing master-delete path.
+        /// </summary>
+        private async Task DeleteOccurrenceAsync(Event occurrence)
+        {
+            var dialog = new ContentDialog
+            {
+                Title = "Delete recurring event",
+                Content = $"\"{occurrence.Title}\" is part of a recurring "
+                       + "series. Skip just this occurrence, or delete the "
+                       + "entire series?",
+                PrimaryButtonText = "Skip this occurrence",
+                SecondaryButtonText = "Delete entire series",
+                CloseButtonText = "Cancel",
+                DefaultButton = ContentDialogButton.Close,
+                XamlRoot = Content.XamlRoot
+            };
+
+            var result = await dialog.ShowAsync();
+            switch (result)
+            {
+                case ContentDialogResult.Primary:
+                    await AppendExDateAsync(occurrence);
+                    break;
+
+                case ContentDialogResult.Secondary:
+                    await _eventRepository.DeleteAsync(occurrence.Id);
+                    break;
+
+                default:
+                    return; // Cancelled — leave the working tree unchanged.
+            }
+        }
+
+        private async Task AppendExDateAsync(Event occurrence)
+        {
+            if (occurrence.SeriesAnchorUtc is not DateTime anchor)
+                return; // Should not happen — IsOccurrence guarantees non-null.
+
+            var master = await _eventRepository.GetByIdAsync(occurrence.Id);
+            if (master is null)
+                return; // Master gone — refresh will drop the stale occurrence.
+
+            var existing = master.RecurrenceExDatesUtc;
+            var updated = new DateTime[existing.Count + 1];
+            for (int i = 0; i < existing.Count; i++)
+                updated[i] = existing[i];
+            updated[existing.Count] = anchor;
+
+            master.RecurrenceExDatesUtc = updated;
+            master.UpdatedAtUtc = DateTime.UtcNow;
+
+            // RecurrenceEndUtcCached is unaffected — EXDATE never changes
+            // series termination (DECISIONS.md "Named invariants" #3, #6).
+            await _eventRepository.UpdateAsync(master);
         }
     }
 }

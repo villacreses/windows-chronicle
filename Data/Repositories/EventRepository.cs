@@ -53,6 +53,7 @@ public sealed class EventRepository
 #pragma warning restore CA1822 // Mark members as static
     {
         evt.Validate();
+        RefuseOccurrence(evt);
 
         using var connection =
             AppDatabase.GetConnection();
@@ -108,6 +109,7 @@ public sealed class EventRepository
     public async Task UpdateAsync(Event evt)
     {
         evt.Validate();
+        RefuseOccurrence(evt);
 
         using var connection =
             AppDatabase.GetConnection();
@@ -138,6 +140,24 @@ public sealed class EventRepository
             evt.UpdatedAtUtc.ToString("O"));
 
         await command.ExecuteNonQueryAsync();
+    }
+
+    // Chokepoint enforcement of the persistence invariant: only master /
+    // standalone rows are persisted. Expanded occurrences are projections
+    // and must not reach the writer — see DECISIONS.md "Recurrence ...
+    // named invariants" #1. Persisting an occurrence would overwrite the
+    // master with the occurrence's projected times, silently destroying
+    // the series; this guard fails loudly at the boundary instead.
+    private static void RefuseOccurrence(Event evt)
+    {
+        if (evt.IsOccurrence)
+        {
+            throw new InvalidOperationException(
+                "Cannot persist an expanded occurrence. The repository writes "
+                + "persistent rows only; occurrences are projections. Use the "
+                + "EXDATE write path to skip an occurrence, or update the "
+                + "master row to change the series.");
+        }
     }
 
     private static void BindEventParameters(
@@ -192,6 +212,67 @@ public sealed class EventRepository
 
         var result = await command.ExecuteScalarAsync();
         return Convert.ToInt32(result, CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// Fetches a single persisted row by Id, or null if missing. Used by
+    /// edit / skip-occurrence flows that hold a projected occurrence and
+    /// need to reach its master row.
+    /// </summary>
+    public async Task<Event?> GetByIdAsync(Guid id)
+    {
+        using var connection = AppDatabase.GetConnection();
+        using var command = connection.CreateCommand();
+
+        command.CommandText =
+        """
+        SELECT
+            Id,
+            CalendarId,
+            Title,
+            Description,
+            StartTimeUtc,
+            EndTimeUtc,
+            IsAllDay,
+            RecurrenceRule,
+            RecurrenceExDatesUtc,
+            RecurrenceEndUtcCached,
+            CreatedAtUtc,
+            UpdatedAtUtc
+        FROM Events
+        WHERE Id = $id
+        LIMIT 1;
+        """;
+
+        command.Parameters.AddWithValue("$id", id.ToString());
+
+        using var reader = await command.ExecuteReaderAsync();
+        if (!await reader.ReadAsync())
+            return null;
+
+        return ReadEvent(reader);
+    }
+
+    private static Event ReadEvent(Microsoft.Data.Sqlite.SqliteDataReader reader)
+    {
+        return new Event
+        {
+            Id = Guid.Parse(reader.GetString(0)),
+            CalendarId = Guid.Parse(reader.GetString(1)),
+            Title = reader.GetString(2),
+            Description = reader.IsDBNull(3) ? null : reader.GetString(3),
+            StartTimeUtc = ParseUtcDateTime(reader.GetString(4)),
+            EndTimeUtc = ParseUtcDateTime(reader.GetString(5)),
+            IsAllDay = reader.GetInt32(6) == 1,
+            RecurrenceRule = reader.IsDBNull(7) ? null : reader.GetString(7),
+            RecurrenceExDatesUtc = ParseExDates(
+                reader.IsDBNull(8) ? null : reader.GetString(8)),
+            RecurrenceEndUtcCached = reader.IsDBNull(9)
+                ? null
+                : ParseUtcDateTime(reader.GetString(9)),
+            CreatedAtUtc = ParseUtcDateTime(reader.GetString(10)),
+            UpdatedAtUtc = ParseUtcDateTime(reader.GetString(11)),
+        };
     }
 
     public async Task<List<Event>> GetInRangeAsync(
@@ -252,65 +333,11 @@ public sealed class EventRepository
             "$rangeEndUtc",
             rangeEndUtc.ToString("O"));
 
-        using var reader =
-            await command.ExecuteReaderAsync();
+        using var reader = await command.ExecuteReaderAsync();
 
         var events = new List<Event>();
-
         while (await reader.ReadAsync())
-        {
-            events.Add(
-                new Event
-                {
-                    Id = Guid.Parse(
-                        reader.GetString(0)),
-
-                    CalendarId = Guid.Parse(
-                        reader.GetString(1)),
-
-                    Title = reader.GetString(2),
-
-                    Description =
-                        reader.IsDBNull(3)
-                            ? null
-                            : reader.GetString(3),
-
-                    StartTimeUtc =
-                        ParseUtcDateTime(
-                            reader.GetString(4)),
-
-                    EndTimeUtc =
-                        ParseUtcDateTime(
-                            reader.GetString(5)),
-
-                    IsAllDay =
-                        reader.GetInt32(6) == 1,
-
-                    RecurrenceRule =
-                        reader.IsDBNull(7)
-                            ? null
-                            : reader.GetString(7),
-
-                    RecurrenceExDatesUtc =
-                        ParseExDates(
-                            reader.IsDBNull(8)
-                                ? null
-                                : reader.GetString(8)),
-
-                    RecurrenceEndUtcCached =
-                        reader.IsDBNull(9)
-                            ? null
-                            : ParseUtcDateTime(reader.GetString(9)),
-
-                    CreatedAtUtc =
-                        ParseUtcDateTime(
-                            reader.GetString(10)),
-
-                    UpdatedAtUtc =
-                        ParseUtcDateTime(
-                            reader.GetString(11))
-                });
-        }
+            events.Add(ReadEvent(reader));
 
         return events;
     }

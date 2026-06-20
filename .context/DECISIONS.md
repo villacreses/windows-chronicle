@@ -366,6 +366,35 @@ is mode-dependent. Migration from UTC anchoring to tz anchoring on an
 existing master is therefore a breaking change to its projection space
 (invariant #2) and is treated as such.
 
+### Tolerated ambiguity: `Event` carries dual semantics in UI read paths
+
+Phase 1 ships with `Event` carrying two semantically distinct shapes —
+persistent rows and expanded occurrences — in a single type. The
+distinction is mediated by `Event.IsOccurrence` / `EventKey` at read
+sites and enforced at the persistence boundary by
+`EventRepository.RefuseOccurrence`.
+
+A wrapper type (`EventInstance` or similar) that encodes the
+projection-vs-entity split in the type system was discussed and
+deliberately deferred. The cost of a wrapper is paid in every renderer
+and tap-target signature; the bug class it would structurally prevent
+(occurrence handed to a persistence write) is already caught by the
+repository guard. The cost of staying without it is paid in discipline
+at branching mutation paths.
+
+**Revisit trigger.** Introduce the wrapper when either:
+
+- a second projection consumer appears that needs to distinguish
+  occurrences from masters at read time (drag/drop reschedule, inline
+  edit, multi-select copy/paste, provider sync reconciliation), OR
+- `IsOccurrence` branching appears in more than one mutation path
+  beyond the Phase 1 edit / delete handlers — i.e. a third place,
+  not "drag/drop someday."
+
+Until one of those triggers fires, the chokepoint + discriminator
+approach is the accepted answer. The deal is recorded here so any
+future revisit lands on the same evidence both sides agreed to.
+
 ---
 
 ## DEV-ONLY THEME OVERRIDE (2026-06-14)
