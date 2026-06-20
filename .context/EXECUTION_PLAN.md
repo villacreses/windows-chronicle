@@ -34,7 +34,27 @@ No UI polish work should be introduced outside of Theme infrastructure stability
 
 ## Current Milestone
 
-Recurrence (see Next Milestones)
+Recurrence — Phase 1 (recurrence engine + skip-occurrence)
+
+See `DECISIONS.md` → "Recurrence: RRULE Canonical Form, Two-Phase
+Rollout" for scope and rationale.
+
+Phase 1 sub-steps:
+
+1. Engine foundation — schema migration, `Event` model fields,
+   `RecurrenceRule` value object + RFC 5545 parser,
+   `RecurrenceExpander`, `EventRepository` I/O for the new columns.
+   *(No visible UI change yet — recurring events still don't expand
+   end-to-end.)*
+2. Expansion integration — `LoadEventsAsync` runs the expander before
+   the GroupBy step that produces `_eventsByDate`. Recurring events now
+   render across all matching days in Month / Week / Day.
+3. Editor + delete dialog — Repeats picker in `EventEditPopover`
+   (preset patterns only), recurring-event banner on edit, "Skip this
+   occurrence" branch in the delete confirmation.
+
+Phase 2 (occurrence mutation) follows once Phase 1 has shipped and
+proven the engine.
 
 ## Recently Completed: Day View
 

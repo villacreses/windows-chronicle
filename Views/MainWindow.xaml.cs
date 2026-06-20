@@ -1,6 +1,7 @@
 using Chronicle.Data.Repositories;
 using Chronicle.Helpers;
 using Chronicle.Models;
+using Chronicle.Models.Recurrence;
 using Chronicle.Views.Dialogs;
 using Chronicle.Views.Popovers;
 using Chronicle.Views.Rendering;
@@ -54,12 +55,17 @@ namespace Chronicle
         // Seeded to true for every calendar; resets on app restart (by design).
         private Dictionary<Guid, bool> _calendarVisibility = new();
 
-        // Raw events for the currently loaded range, before the visibility
-        // filter. _eventsByDate is derived from this plus _calendarVisibility;
-        // visibility toggles re-filter without going to the DB. The loaded
-        // range tracks what the cache covers so EnsureEventsLoadedAsync can
-        // skip the query when the active view's range fits inside it (e.g.,
-        // switching Month → Week → Day in place).
+        // Events for the currently loaded range, before the visibility filter.
+        // Contains:
+        //   - standalone events that overlap the range
+        //   - expanded recurrence occurrences (transient Event instances
+        //     synthesized from recurring masters by RecurrenceExpander)
+        // Recurring master rows are NOT stored here — only their expansions
+        // enter the projection. `_eventsByDate` is derived from this plus
+        // `_calendarVisibility`; visibility toggles re-filter without
+        // re-expanding. The loaded range tracks what the cache covers so
+        // EnsureEventsLoadedAsync can skip the query when the active view's
+        // range fits inside it (e.g., switching Month → Week → Day in place).
         private List<Event> _loadedEvents = new();
         private DateTime _loadedRangeStartUtc = DateTime.MaxValue;
         private DateTime _loadedRangeEndUtc = DateTime.MinValue;
@@ -488,33 +494,34 @@ namespace Chronicle
 
         /// <summary>
         /// Locates the chip whose <see cref="EventTapTarget"/> matches
-        /// <paramref name="eventId"/> in the active view's subtree, deferring
+        /// <paramref name="key"/> in the active view's subtree, deferring
         /// until layout has settled so Month View's <c>SizeChanged</c>-driven
         /// chip insertion has run. Week/Day timelines insert chips
         /// synchronously, so the deferral is a no-op there but keeps a single
-        /// code path for both.
+        /// code path for both. Keys by <see cref="EventKey"/> so expanded
+        /// occurrences of the same series resolve to distinct chips.
         /// </summary>
-        private Task<FrameworkElement?> FindChipForEventAsync(Guid eventId)
+        private Task<FrameworkElement?> FindChipForEventAsync(EventKey key)
         {
             var tcs = new TaskCompletionSource<FrameworkElement?>();
             // Low priority queues behind any pending layout/render work, so
             // Month View's deferred FillEventsArea has inserted its chips by
             // the time we walk the tree.
             DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, () =>
-                tcs.SetResult(FindChipForEvent(ActiveViewRoot, eventId)));
+                tcs.SetResult(FindChipForEvent(ActiveViewRoot, key)));
             return tcs.Task;
         }
 
         /// <summary>
         /// Depth-first scan for a <see cref="FrameworkElement"/> whose
         /// <see cref="FrameworkElement.Tag"/> carries an
-        /// <see cref="EventTapTarget"/> for <paramref name="eventId"/>.
+        /// <see cref="EventTapTarget"/> matching <paramref name="key"/>.
         /// Both event chips and timeline event blocks tag themselves this way
         /// (see <see cref="CalendarRenderHelper.CreateEventChip"/> and
         /// <see cref="TimelineRenderHelper"/>), so one walker covers Month,
         /// Week, and Day.
         /// </summary>
-        private static FrameworkElement? FindChipForEvent(DependencyObject root, Guid eventId)
+        private static FrameworkElement? FindChipForEvent(DependencyObject root, EventKey key)
         {
             int count = VisualTreeHelper.GetChildrenCount(root);
             for (int i = 0; i < count; i++)
@@ -522,9 +529,9 @@ namespace Chronicle
                 var child = VisualTreeHelper.GetChild(root, i);
                 if (child is FrameworkElement fe
                     && fe.Tag is EventTapTarget t
-                    && t.Event.Id == eventId)
+                    && EventKey.For(t.Event) == key)
                     return fe;
-                var found = FindChipForEvent(child, eventId);
+                var found = FindChipForEvent(child, key);
                 if (found is not null)
                     return found;
             }
@@ -555,7 +562,7 @@ namespace Chronicle
             // it reads the same as the edit popover (anchored to its event
             // chip) — uniform talk-bubble behavior across both flows. Falls
             // back to the active view root if the chip can't be located.
-            var naturalAnchor = await FindChipForEventAsync(draft.Id) ?? ActiveViewRoot;
+            var naturalAnchor = await FindChipForEventAsync(EventKey.For(draft)) ?? ActiveViewRoot;
             var (anchor, placement) = ResolvePopoverAnchor(naturalAnchor);
 
             Event? created;
@@ -603,7 +610,7 @@ namespace Chronicle
                 EndTimeUtc = startUtc.AddHours(1),
                 IsAllDay = false,
                 Description = null,
-                RecurrenceRuleJson = null,
+                RecurrenceRule = null,
                 CreatedAtUtc = nowUtc,
                 UpdatedAtUtc = nowUtc
             };
@@ -722,9 +729,44 @@ namespace Chronicle
             if (rangeStart >= _loadedRangeStartUtc && rangeEnd <= _loadedRangeEndUtc)
                 return;
 
-            _loadedEvents = await _eventRepository.GetInRangeAsync(rangeStart, rangeEnd);
+            var rows = await _eventRepository.GetInRangeAsync(rangeStart, rangeEnd);
+            _loadedEvents = ExpandRecurrences(rows, rangeStart, rangeEnd);
             _loadedRangeStartUtc = rangeStart;
             _loadedRangeEndUtc = rangeEnd;
+        }
+
+        /// <summary>
+        /// Flattens repository rows into the projection that
+        /// <see cref="_eventsByDate"/> ultimately groups: standalone rows pass
+        /// through; recurring master rows are replaced by their expansions
+        /// over the load range. Masters never enter the result — only their
+        /// expansions do. Expansion is bounded by the active view's range
+        /// (≤ 42 days), so the per-call cost is small even for long-lived
+        /// series; it runs once per range change, not on visibility toggles.
+        /// </summary>
+        private static List<Event> ExpandRecurrences(
+            List<Event> rows,
+            DateTime rangeStartUtc,
+            DateTime rangeEndUtc)
+        {
+            var result = new List<Event>(rows.Count);
+
+            foreach (var row in rows)
+            {
+                if (row.RecurrenceRule is null)
+                {
+                    result.Add(row);
+                    continue;
+                }
+
+                foreach (var occurrence in
+                    RecurrenceExpander.Expand(row, rangeStartUtc, rangeEndUtc))
+                {
+                    result.Add(occurrence);
+                }
+            }
+
+            return result;
         }
 
         /// <summary>

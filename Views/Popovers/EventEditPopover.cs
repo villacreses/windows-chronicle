@@ -74,7 +74,7 @@ public static class EventEditPopover
                     EndTimeUtc = endUtc,
                     Description = null,
                     IsAllDay = false,
-                    RecurrenceRuleJson = null,
+                    RecurrenceRule = null,
                     CreatedAtUtc = nowUtc,
                     UpdatedAtUtc = nowUtc
                 };
@@ -85,7 +85,8 @@ public static class EventEditPopover
     /// Shows the edit-event popover anchored to <paramref name="anchorElement"/>
     /// (typically the event chip the user is editing), pre-filled from
     /// <paramref name="eventToEdit"/>. Fields not on the form (Id, Description,
-    /// IsAllDay, RecurrenceRuleJson, CreatedAtUtc) are preserved;
+    /// IsAllDay, RecurrenceRule, RecurrenceExDatesUtc, RecurrenceEndUtcCached,
+    /// CreatedAtUtc) are preserved;
     /// <c>UpdatedAtUtc</c> is refreshed. Returns the edited <see cref="Event"/>
     /// on save, or <c>null</c> if dismissed without saving.
     /// </summary>
@@ -113,7 +114,9 @@ public static class EventEditPopover
                 EndTimeUtc = endUtc,
                 Description = eventToEdit.Description,
                 IsAllDay = eventToEdit.IsAllDay,
-                RecurrenceRuleJson = eventToEdit.RecurrenceRuleJson,
+                RecurrenceRule = eventToEdit.RecurrenceRule,
+                RecurrenceExDatesUtc = eventToEdit.RecurrenceExDatesUtc,
+                RecurrenceEndUtcCached = eventToEdit.RecurrenceEndUtcCached,
                 CreatedAtUtc = eventToEdit.CreatedAtUtc,
                 UpdatedAtUtc = DateTime.UtcNow
             });

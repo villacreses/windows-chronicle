@@ -1,4 +1,4 @@
-﻿CREATE TABLE IF NOT EXISTS Calendars (
+CREATE TABLE IF NOT EXISTS Calendars (
     Id TEXT PRIMARY KEY,
     Name TEXT NOT NULL,
     Color TEXT NOT NULL
@@ -17,7 +17,9 @@ CREATE TABLE IF NOT EXISTS Events (
 
     IsAllDay INTEGER NOT NULL,
 
-    RecurrenceRuleJson TEXT,
+    RecurrenceRule TEXT,
+    RecurrenceExDatesUtc TEXT,
+    RecurrenceEndUtcCached TEXT,
 
     CreatedAtUtc TEXT NOT NULL,
     UpdatedAtUtc TEXT NOT NULL,
@@ -33,3 +35,6 @@ ON Events(EndTimeUtc);
 
 CREATE INDEX IF NOT EXISTS IX_Events_CalendarId
 ON Events(CalendarId);
+
+CREATE INDEX IF NOT EXISTS IX_Events_RecurrenceEndUtcCached
+ON Events(RecurrenceEndUtcCached);
