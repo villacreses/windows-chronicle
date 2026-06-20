@@ -21,7 +21,15 @@
 
   <ItemGroup>
     <Content Include="Data\Schema.sql">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <!--
+        Always (not PreserveNewest): WinUI 3 single-project MSIX packaging
+        doesn't reliably propagate PreserveNewest content updates to the
+        AppX-deployed copy between deploys, which leaves stale schema on
+        disk while the in-process migration code is already on the new
+        version. The file is small; the noise of always-copy is cheaper
+        than a stale-schema launch failure during recurrence/migration work.
+      -->
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
 

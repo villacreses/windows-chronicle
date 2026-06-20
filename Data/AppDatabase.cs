@@ -97,13 +97,17 @@ public static class AppDatabase
             add.CommandText =
                 "ALTER TABLE Events ADD COLUMN RecurrenceEndUtcCached TEXT;";
             add.ExecuteNonQuery();
-
-            using var index = connection.CreateCommand();
-            index.CommandText =
-                "CREATE INDEX IF NOT EXISTS IX_Events_RecurrenceEndUtcCached "
-                + "ON Events(RecurrenceEndUtcCached);";
-            index.ExecuteNonQuery();
         }
+
+        // Always ensure the index exists — covers fresh installs (column
+        // came in via CREATE TABLE) and migrated DBs alike. Idempotent.
+        // Lives here, not in Schema.sql, because Schema.sql runs before
+        // the column-add step and would fail on a pre-recurrence DB.
+        using var indexCmd = connection.CreateCommand();
+        indexCmd.CommandText =
+            "CREATE INDEX IF NOT EXISTS IX_Events_RecurrenceEndUtcCached "
+            + "ON Events(RecurrenceEndUtcCached);";
+        indexCmd.ExecuteNonQuery();
     }
 
     private static HashSet<string> GetEventsColumns(

@@ -36,5 +36,9 @@ ON Events(EndTimeUtc);
 CREATE INDEX IF NOT EXISTS IX_Events_CalendarId
 ON Events(CalendarId);
 
-CREATE INDEX IF NOT EXISTS IX_Events_RecurrenceEndUtcCached
-ON Events(RecurrenceEndUtcCached);
+-- IX_Events_RecurrenceEndUtcCached is created by AppDatabase
+-- .MigrateRecurrenceColumns so it lands on both fresh installs (after
+-- the column exists from CREATE TABLE) and migrated databases (after
+-- ALTER TABLE adds the column). It cannot live here because this file
+-- runs before the migration step, and on a pre-recurrence DB the
+-- column does not yet exist.
