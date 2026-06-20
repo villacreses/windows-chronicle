@@ -24,10 +24,13 @@ namespace Chronicle.Views.Popovers;
 /// <see cref="ShowEditEventAsync"/> return the resulting <see cref="Event"/> on
 /// save, or <c>null</c> if the popover is cancelled or light-dismissed.
 ///
-/// Placement matches the read-only <see cref="EventPopover"/>
-/// (<see cref="FlyoutPlacementMode.RightEdgeAlignedTop"/>) so the editor reads
-/// as a continuation of the same talk-bubble that the read-only popover
-/// established. Anchoring to a small element (rather than the window content)
+/// Placement defaults to <see cref="FlyoutPlacementMode.RightEdgeAlignedTop"/>,
+/// matching the read-only <see cref="EventPopover"/> so the editor reads as a
+/// continuation of the same talk-bubble. Callers can override it — Day View
+/// uses <see cref="FlyoutPlacementMode.Top"/>, which centers the form over its
+/// full-width chip (i.e. on the main section), since edge-aligning against a
+/// full-width Day chip would cram the form against the window edge and overflow
+/// its contents. Anchoring to a small element (rather than the window content)
 /// also keeps the flyout's light-dismiss capture region off the scrollbar.
 ///
 /// The popover performs no persistence — it only constructs and returns the
@@ -47,10 +50,12 @@ public static class EventEditPopover
     public static Task<Event?> ShowCreateEventAsync(
         FrameworkElement anchorElement,
         DateTime suggestedStartTime,
-        IList<Calendar> availableCalendars)
+        IList<Calendar> availableCalendars,
+        FlyoutPlacementMode placement = FlyoutPlacementMode.RightEdgeAlignedTop)
     {
         return ShowAsync(
             anchorElement,
+            placement,
             heading: "Create Event",
             initialTitle: "",
             initialStartLocal: suggestedStartTime,
@@ -87,10 +92,12 @@ public static class EventEditPopover
     public static Task<Event?> ShowEditEventAsync(
         FrameworkElement anchorElement,
         Event eventToEdit,
-        IList<Calendar> availableCalendars)
+        IList<Calendar> availableCalendars,
+        FlyoutPlacementMode placement = FlyoutPlacementMode.RightEdgeAlignedTop)
     {
         return ShowAsync(
             anchorElement,
+            placement,
             heading: "Edit Event",
             initialTitle: eventToEdit.Title,
             initialStartLocal: eventToEdit.StartTimeUtc.ToLocalTime(),
@@ -123,6 +130,7 @@ public static class EventEditPopover
     /// </summary>
     private static Task<Event?> ShowAsync(
         FrameworkElement anchorElement,
+        FlyoutPlacementMode placement,
         string heading,
         string initialTitle,
         DateTime initialStartLocal,
@@ -218,14 +226,13 @@ public static class EventEditPopover
         buttonRow.Children.Add(cancelButton);
         root.Children.Add(buttonRow);
 
-        // RightEdgeAlignedTop matches the read-only EventPopover so the editor
-        // feels like a continuation of the same talk-bubble that the read-only
-        // popover established. Anchoring to a small element (not Content) also
-        // keeps the flyout's light-dismiss capture region off the scrollbar.
+        // Placement is caller-chosen (default RightEdgeAlignedTop). Anchoring to
+        // a small element (not Content) keeps the flyout's light-dismiss capture
+        // region off the scrollbar.
         var flyout = new Flyout
         {
             Content = root,
-            Placement = FlyoutPlacementMode.RightEdgeAlignedTop
+            Placement = placement
         };
 
         saveButton.Click += (s, e) =>
