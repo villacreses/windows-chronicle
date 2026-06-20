@@ -455,6 +455,38 @@ namespace Chronicle
         };
 
         /// <summary>
+        /// Resolves the anchor + placement for an edit/create popover. Day View
+        /// chips span the full width of the main section, so edge-aligning the
+        /// popover against one crams it into the window margin and overflows the
+        /// form. For anchors inside the Day timeline we keep the chip as anchor
+        /// but place the popover <see cref="FlyoutPlacementMode.Top"/> of it —
+        /// Top centers the flyout horizontally over its target, and since the
+        /// target spans the main section that lands the popover centered on it
+        /// (WinUI flips it below automatically if the chip is too near the top).
+        /// Everything else (Month/Week chips, selected-day sidebar rows — even
+        /// while Day View is active) keeps the right-edge talk-bubble.
+        /// </summary>
+        private (FrameworkElement anchor, FlyoutPlacementMode placement) ResolvePopoverAnchor(
+            FrameworkElement naturalAnchor)
+        {
+            if (IsDescendantOrSelf(naturalAnchor, DayViewRoot))
+                return (naturalAnchor, FlyoutPlacementMode.Top);
+            return (naturalAnchor, FlyoutPlacementMode.RightEdgeAlignedTop);
+        }
+
+        /// <summary>
+        /// True if <paramref name="node"/> is <paramref name="ancestor"/> or sits
+        /// anywhere beneath it in the visual tree.
+        /// </summary>
+        private static bool IsDescendantOrSelf(DependencyObject? node, DependencyObject ancestor)
+        {
+            for (; node is not null; node = VisualTreeHelper.GetParent(node))
+                if (ReferenceEquals(node, ancestor))
+                    return true;
+            return false;
+        }
+
+        /// <summary>
         /// Locates the chip whose <see cref="EventTapTarget"/> matches
         /// <paramref name="eventId"/> in the active view's subtree, deferring
         /// until layout has settled so Month View's <c>SizeChanged</c>-driven
@@ -523,13 +555,14 @@ namespace Chronicle
             // it reads the same as the edit popover (anchored to its event
             // chip) — uniform talk-bubble behavior across both flows. Falls
             // back to the active view root if the chip can't be located.
-            var anchor = await FindChipForEventAsync(draft.Id) ?? ActiveViewRoot;
+            var naturalAnchor = await FindChipForEventAsync(draft.Id) ?? ActiveViewRoot;
+            var (anchor, placement) = ResolvePopoverAnchor(naturalAnchor);
 
             Event? created;
             try
             {
                 created = await EventEditPopover.ShowCreateEventAsync(
-                    anchor, suggestedStartLocal, _allCalendars);
+                    anchor, suggestedStartLocal, _allCalendars, placement);
             }
             finally
             {
@@ -627,16 +660,19 @@ namespace Chronicle
         }
 
         /// <summary>
-        /// Opens the edit-event popover for <paramref name="evt"/>, anchored to
-        /// <paramref name="anchor"/> (typically the event chip the user is
+        /// Opens the edit-event popover for <paramref name="evt"/> near
+        /// <paramref name="naturalAnchor"/> (typically the event chip the user is
         /// editing — captured in <see cref="OnEventClicked"/> and threaded
-        /// through <see cref="EventPopover_EditRequested"/>). On save, updates
-        /// the event and refreshes the active view. No-op if dismissed.
+        /// through <see cref="EventPopover_EditRequested"/>). The anchor and
+        /// placement are resolved via <see cref="ResolvePopoverAnchor"/> so Day
+        /// View centers instead of edge-aligning. On save, updates the event and
+        /// refreshes the active view. No-op if dismissed.
         /// </summary>
-        private async Task EditEventAsync(Event evt, FrameworkElement anchor)
+        private async Task EditEventAsync(Event evt, FrameworkElement naturalAnchor)
         {
+            var (anchor, placement) = ResolvePopoverAnchor(naturalAnchor);
             var edited = await EventEditPopover.ShowEditEventAsync(
-                anchor, evt, _allCalendars);
+                anchor, evt, _allCalendars, placement);
             if (edited is null)
                 return;
 
@@ -785,7 +821,13 @@ namespace Chronicle
             _lastEventAnchor = anchor;
             var calendar = _allCalendars.FirstOrDefault(c => c.Id == evt.CalendarId);
             _eventPopover.SetEvent(evt, calendar);
-            _eventPopoverFlyout.ShowAt(anchor);
+
+            // Same Day-View carve-out as the edit/create popovers: full-width
+            // Day chips force a centered placement instead of the right-edge
+            // talk-bubble. Resolve per-show since the flyout is reused.
+            var (resolvedAnchor, placement) = ResolvePopoverAnchor(anchor);
+            _eventPopoverFlyout.Placement = placement;
+            _eventPopoverFlyout.ShowAt(resolvedAnchor);
         }
 
         /// <summary>
