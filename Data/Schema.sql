@@ -1,4 +1,4 @@
-﻿CREATE TABLE IF NOT EXISTS Calendars (
+CREATE TABLE IF NOT EXISTS Calendars (
     Id TEXT PRIMARY KEY,
     Name TEXT NOT NULL,
     Color TEXT NOT NULL
@@ -17,7 +17,9 @@ CREATE TABLE IF NOT EXISTS Events (
 
     IsAllDay INTEGER NOT NULL,
 
-    RecurrenceRuleJson TEXT,
+    RecurrenceRule TEXT,
+    RecurrenceExDatesUtc TEXT,
+    RecurrenceEndUtcCached TEXT,
 
     CreatedAtUtc TEXT NOT NULL,
     UpdatedAtUtc TEXT NOT NULL,
@@ -33,3 +35,10 @@ ON Events(EndTimeUtc);
 
 CREATE INDEX IF NOT EXISTS IX_Events_CalendarId
 ON Events(CalendarId);
+
+-- IX_Events_RecurrenceEndUtcCached is created by AppDatabase
+-- .MigrateRecurrenceColumns so it lands on both fresh installs (after
+-- the column exists from CREATE TABLE) and migrated databases (after
+-- ALTER TABLE adds the column). It cannot live here because this file
+-- runs before the migration step, and on a pre-recurrence DB the
+-- column does not yet exist.

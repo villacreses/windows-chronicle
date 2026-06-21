@@ -1,4 +1,4 @@
-﻿using Chronicle.Models;
+using Chronicle.Models;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -19,11 +19,41 @@ public sealed class EventRepository
         return DateTime.SpecifyKind(parsed.ToUniversalTime(), DateTimeKind.Utc);
     }
 
+    // EXDATE is stored as newline-separated ISO-8601 UTC strings — no
+    // JSON parser in the hot path, AOT-friendly.
+    private const char ExDateSeparator = '\n';
+
+    private static string? SerializeExDates(IReadOnlyList<DateTime> exDates)
+    {
+        if (exDates.Count == 0)
+            return null;
+
+        var parts = new string[exDates.Count];
+        for (int i = 0; i < exDates.Count; i++)
+            parts[i] = exDates[i].ToString("O");
+
+        return string.Join(ExDateSeparator, parts);
+    }
+
+    private static IReadOnlyList<DateTime> ParseExDates(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+            return Array.Empty<DateTime>();
+
+        var parts = value.Split(ExDateSeparator, StringSplitOptions.RemoveEmptyEntries);
+        var result = new DateTime[parts.Length];
+        for (int i = 0; i < parts.Length; i++)
+            result[i] = ParseUtcDateTime(parts[i]);
+
+        return result;
+    }
+
 #pragma warning disable CA1822 // Mark members as static
     public async Task InsertAsync(Event evt)
 #pragma warning restore CA1822 // Mark members as static
     {
         evt.Validate();
+        RefuseOccurrence(evt);
 
         using var connection =
             AppDatabase.GetConnection();
@@ -41,7 +71,9 @@ public sealed class EventRepository
             StartTimeUtc,
             EndTimeUtc,
             IsAllDay,
-            RecurrenceRuleJson,
+            RecurrenceRule,
+            RecurrenceExDatesUtc,
+            RecurrenceEndUtcCached,
             CreatedAtUtc,
             UpdatedAtUtc
         )
@@ -53,43 +85,15 @@ public sealed class EventRepository
             $startTimeUtc,
             $endTimeUtc,
             $isAllDay,
-            $recurrenceRuleJson,
+            $recurrenceRule,
+            $recurrenceExDates,
+            $recurrenceEndUtcCached,
             $createdAtUtc,
             $updatedAtUtc
         );
         """;
 
-        command.Parameters.AddWithValue(
-            "$id",
-            evt.Id.ToString());
-
-        command.Parameters.AddWithValue(
-            "$calendarId",
-            evt.CalendarId.ToString());
-
-        command.Parameters.AddWithValue(
-            "$title",
-            evt.Title);
-
-        command.Parameters.AddWithValue(
-            "$description",
-            (object?)evt.Description ?? DBNull.Value);
-
-        command.Parameters.AddWithValue(
-            "$startTimeUtc",
-            evt.StartTimeUtc.ToString("O"));
-
-        command.Parameters.AddWithValue(
-            "$endTimeUtc",
-            evt.EndTimeUtc.ToString("O"));
-
-        command.Parameters.AddWithValue(
-            "$isAllDay",
-            evt.IsAllDay ? 1 : 0);
-
-        command.Parameters.AddWithValue(
-            "$recurrenceRuleJson",
-            (object?)evt.RecurrenceRuleJson ?? DBNull.Value);
+        BindEventParameters(command, evt);
 
         command.Parameters.AddWithValue(
             "$createdAtUtc",
@@ -105,6 +109,7 @@ public sealed class EventRepository
     public async Task UpdateAsync(Event evt)
     {
         evt.Validate();
+        RefuseOccurrence(evt);
 
         using var connection =
             AppDatabase.GetConnection();
@@ -115,28 +120,65 @@ public sealed class EventRepository
         command.CommandText =
         """
         UPDATE Events SET
-            CalendarId       = $calendarId,
-            Title            = $title,
-            Description      = $description,
-            StartTimeUtc     = $startTimeUtc,
-            EndTimeUtc       = $endTimeUtc,
-            IsAllDay         = $isAllDay,
-            RecurrenceRuleJson = $recurrenceRuleJson,
-            UpdatedAtUtc     = $updatedAtUtc
+            CalendarId             = $calendarId,
+            Title                  = $title,
+            Description            = $description,
+            StartTimeUtc           = $startTimeUtc,
+            EndTimeUtc             = $endTimeUtc,
+            IsAllDay               = $isAllDay,
+            RecurrenceRule         = $recurrenceRule,
+            RecurrenceExDatesUtc   = $recurrenceExDates,
+            RecurrenceEndUtcCached = $recurrenceEndUtcCached,
+            UpdatedAtUtc           = $updatedAtUtc
         WHERE Id = $id;
         """;
 
-        command.Parameters.AddWithValue("$id",               evt.Id.ToString());
-        command.Parameters.AddWithValue("$calendarId",       evt.CalendarId.ToString());
-        command.Parameters.AddWithValue("$title",            evt.Title);
-        command.Parameters.AddWithValue("$description",      (object?)evt.Description ?? DBNull.Value);
-        command.Parameters.AddWithValue("$startTimeUtc",     evt.StartTimeUtc.ToString("O"));
-        command.Parameters.AddWithValue("$endTimeUtc",       evt.EndTimeUtc.ToString("O"));
-        command.Parameters.AddWithValue("$isAllDay",         evt.IsAllDay ? 1 : 0);
-        command.Parameters.AddWithValue("$recurrenceRuleJson", (object?)evt.RecurrenceRuleJson ?? DBNull.Value);
-        command.Parameters.AddWithValue("$updatedAtUtc",     evt.UpdatedAtUtc.ToString("O"));
+        BindEventParameters(command, evt);
+
+        command.Parameters.AddWithValue(
+            "$updatedAtUtc",
+            evt.UpdatedAtUtc.ToString("O"));
 
         await command.ExecuteNonQueryAsync();
+    }
+
+    // Chokepoint enforcement of the persistence invariant: only master /
+    // standalone rows are persisted. Expanded occurrences are projections
+    // and must not reach the writer — see DECISIONS.md "Recurrence ...
+    // named invariants" #1. Persisting an occurrence would overwrite the
+    // master with the occurrence's projected times, silently destroying
+    // the series; this guard fails loudly at the boundary instead.
+    private static void RefuseOccurrence(Event evt)
+    {
+        if (evt.IsOccurrence)
+        {
+            throw new InvalidOperationException(
+                "Cannot persist an expanded occurrence. The repository writes "
+                + "persistent rows only; occurrences are projections. Use the "
+                + "EXDATE write path to skip an occurrence, or update the "
+                + "master row to change the series.");
+        }
+    }
+
+    private static void BindEventParameters(
+        Microsoft.Data.Sqlite.SqliteCommand command,
+        Event evt)
+    {
+        command.Parameters.AddWithValue("$id",           evt.Id.ToString());
+        command.Parameters.AddWithValue("$calendarId",   evt.CalendarId.ToString());
+        command.Parameters.AddWithValue("$title",        evt.Title);
+        command.Parameters.AddWithValue("$description",  (object?)evt.Description ?? DBNull.Value);
+        command.Parameters.AddWithValue("$startTimeUtc", evt.StartTimeUtc.ToString("O"));
+        command.Parameters.AddWithValue("$endTimeUtc",   evt.EndTimeUtc.ToString("O"));
+        command.Parameters.AddWithValue("$isAllDay",     evt.IsAllDay ? 1 : 0);
+        command.Parameters.AddWithValue("$recurrenceRule",
+            (object?)evt.RecurrenceRule ?? DBNull.Value);
+        command.Parameters.AddWithValue("$recurrenceExDates",
+            (object?)SerializeExDates(evt.RecurrenceExDatesUtc) ?? DBNull.Value);
+        command.Parameters.AddWithValue("$recurrenceEndUtcCached",
+            evt.RecurrenceEndUtcCached is DateTime end
+                ? end.ToString("O")
+                : (object)DBNull.Value);
     }
 
     public async Task DeleteAsync(Guid id)
@@ -172,15 +214,15 @@ public sealed class EventRepository
         return Convert.ToInt32(result, CultureInfo.InvariantCulture);
     }
 
-    public async Task<List<Event>> GetInRangeAsync(
-        DateTime rangeStartUtc,
-        DateTime rangeEndUtc)
+    /// <summary>
+    /// Fetches a single persisted row by Id, or null if missing. Used by
+    /// edit / skip-occurrence flows that hold a projected occurrence and
+    /// need to reach its master row.
+    /// </summary>
+    public async Task<Event?> GetByIdAsync(Guid id)
     {
-        using var connection =
-            AppDatabase.GetConnection();
-
-        using var command =
-            connection.CreateCommand();
+        using var connection = AppDatabase.GetConnection();
+        using var command = connection.CreateCommand();
 
         command.CommandText =
         """
@@ -192,20 +234,93 @@ public sealed class EventRepository
             StartTimeUtc,
             EndTimeUtc,
             IsAllDay,
-            RecurrenceRuleJson,
+            RecurrenceRule,
+            RecurrenceExDatesUtc,
+            RecurrenceEndUtcCached,
+            CreatedAtUtc,
+            UpdatedAtUtc
+        FROM Events
+        WHERE Id = $id
+        LIMIT 1;
+        """;
+
+        command.Parameters.AddWithValue("$id", id.ToString());
+
+        using var reader = await command.ExecuteReaderAsync();
+        if (!await reader.ReadAsync())
+            return null;
+
+        return ReadEvent(reader);
+    }
+
+    private static Event ReadEvent(Microsoft.Data.Sqlite.SqliteDataReader reader)
+    {
+        return new Event
+        {
+            Id = Guid.Parse(reader.GetString(0)),
+            CalendarId = Guid.Parse(reader.GetString(1)),
+            Title = reader.GetString(2),
+            Description = reader.IsDBNull(3) ? null : reader.GetString(3),
+            StartTimeUtc = ParseUtcDateTime(reader.GetString(4)),
+            EndTimeUtc = ParseUtcDateTime(reader.GetString(5)),
+            IsAllDay = reader.GetInt32(6) == 1,
+            RecurrenceRule = reader.IsDBNull(7) ? null : reader.GetString(7),
+            RecurrenceExDatesUtc = ParseExDates(
+                reader.IsDBNull(8) ? null : reader.GetString(8)),
+            RecurrenceEndUtcCached = reader.IsDBNull(9)
+                ? null
+                : ParseUtcDateTime(reader.GetString(9)),
+            CreatedAtUtc = ParseUtcDateTime(reader.GetString(10)),
+            UpdatedAtUtc = ParseUtcDateTime(reader.GetString(11)),
+        };
+    }
+
+    public async Task<List<Event>> GetInRangeAsync(
+        DateTime rangeStartUtc,
+        DateTime rangeEndUtc)
+    {
+        using var connection =
+            AppDatabase.GetConnection();
+
+        using var command =
+            connection.CreateCommand();
+
+        // Non-recurring branch: standard time-window overlap.
+        // Recurring branch: master row qualifies if its series could
+        // still produce occurrences inside the window — i.e. it started
+        // on or before rangeEnd AND (the series hasn't ended yet OR its
+        // cached end is at or past rangeStart). The actual expansion is
+        // done in-memory after the query returns.
+        command.CommandText =
+        """
+        SELECT
+            Id,
+            CalendarId,
+            Title,
+            Description,
+            StartTimeUtc,
+            EndTimeUtc,
+            IsAllDay,
+            RecurrenceRule,
+            RecurrenceExDatesUtc,
+            RecurrenceEndUtcCached,
             CreatedAtUtc,
             UpdatedAtUtc
         FROM Events
         WHERE
         (
-            RecurrenceRuleJson IS NULL
+            RecurrenceRule IS NULL
             AND EndTimeUtc >= $rangeStartUtc
             AND StartTimeUtc <= $rangeEndUtc
         )
         OR
         (
-            RecurrenceRuleJson IS NOT NULL
+            RecurrenceRule IS NOT NULL
             AND StartTimeUtc <= $rangeEndUtc
+            AND (
+                RecurrenceEndUtcCached IS NULL
+                OR RecurrenceEndUtcCached >= $rangeStartUtc
+            )
         )
         ORDER BY StartTimeUtc;
         """;
@@ -218,54 +333,11 @@ public sealed class EventRepository
             "$rangeEndUtc",
             rangeEndUtc.ToString("O"));
 
-        using var reader =
-            await command.ExecuteReaderAsync();
+        using var reader = await command.ExecuteReaderAsync();
 
         var events = new List<Event>();
-
         while (await reader.ReadAsync())
-        {
-            events.Add(
-                new Event
-                {
-                    Id = Guid.Parse(
-                        reader.GetString(0)),
-
-                    CalendarId = Guid.Parse(
-                        reader.GetString(1)),
-
-                    Title = reader.GetString(2),
-
-                    Description =
-                        reader.IsDBNull(3)
-                            ? null
-                            : reader.GetString(3),
-
-                    StartTimeUtc =
-                        ParseUtcDateTime(
-                            reader.GetString(4)),
-
-                    EndTimeUtc =
-                        ParseUtcDateTime(
-                            reader.GetString(5)),
-
-                    IsAllDay =
-                        reader.GetInt32(6) == 1,
-
-                    RecurrenceRuleJson =
-                        reader.IsDBNull(7)
-                            ? null
-                            : reader.GetString(7),
-
-                    CreatedAtUtc =
-                        ParseUtcDateTime(
-                            reader.GetString(8)),
-
-                    UpdatedAtUtc =
-                        ParseUtcDateTime(
-                            reader.GetString(9))
-                });
-        }
+            events.Add(ReadEvent(reader));
 
         return events;
     }
