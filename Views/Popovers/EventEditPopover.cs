@@ -38,6 +38,16 @@ public static class EventEditPopover
 {
     private const double FormWidth = 340;
 
+    // Cached theme brushes — the form is rebuilt programmatically on every
+    // show, and these were the only allocations that needed to be (6 fresh
+    // SolidColorBrush instances per popover open, against an otherwise
+    // identical visual). Brushes are immutable in practice for our usage.
+    private static readonly SolidColorBrush TextBrush     = new(Theme.Text);
+    private static readonly SolidColorBrush Text2Brush    = new(Theme.Text2);
+    private static readonly SolidColorBrush ElevatedBrush = new(Theme.Elevated);
+    private static readonly SolidColorBrush HairlineBrush = new(Theme.Hairline);
+    private static readonly SolidColorBrush DangerBrush   = new(Theme.Danger);
+
     /// <summary>
     /// Shows the create-event popover anchored to <paramref name="anchorElement"/>.
     /// Defaults: <paramref name="suggestedStartTime"/> for one hour, the first
@@ -191,7 +201,7 @@ public static class EventEditPopover
             Text = heading,
             FontSize = 16,
             FontWeight = FontWeights.SemiBold,
-            Foreground = new SolidColorBrush(Theme.Text),
+            Foreground = TextBrush,
             Margin = new Thickness(0, 0, 0, 2)
         });
 
@@ -248,7 +258,7 @@ public static class EventEditPopover
         // Inline error (hidden until validation fails).
         var errorBlock = new TextBlock
         {
-            Foreground = new SolidColorBrush(Theme.Danger),
+            Foreground = DangerBrush,
             TextWrapping = TextWrapping.Wrap,
             Visibility = Visibility.Collapsed
         };
@@ -361,15 +371,15 @@ public static class EventEditPopover
         {
             Text = "This event recurs — saving will update all occurrences "
                  + "in the series.",
-            Foreground = new SolidColorBrush(Theme.Text2),
+            Foreground = Text2Brush,
             FontSize = 12,
             TextWrapping = TextWrapping.Wrap
         };
 
         return new Border
         {
-            Background = new SolidColorBrush(Theme.Elevated),
-            BorderBrush = new SolidColorBrush(Theme.Hairline),
+            Background = ElevatedBrush,
+            BorderBrush = HairlineBrush,
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(4),
             Padding = new Thickness(10, 8, 10, 8),
@@ -442,13 +452,15 @@ public static class EventEditPopover
         };
         root.Children.Add(untilDate);
 
-        var countBox = new NumberBox
+        // TextBox (not NumberBox): NumberBox's template is significantly
+        // heavier to instantiate and only earns its keep when spinner UX
+        // matters. We validate as an int in ReadPicker and surface the
+        // error inline like every other field.
+        var countBox = new TextBox
         {
             HorizontalAlignment = HorizontalAlignment.Stretch,
-            Minimum = 1,
-            Maximum = 9999,
-            Value = 10,
-            SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact
+            Text = "10",
+            PlaceholderText = "Number of occurrences"
         };
         root.Children.Add(countBox);
 
@@ -515,7 +527,7 @@ public static class EventEditPopover
         ToggleButton[] dayChips,
         ComboBox endsCombo,
         DatePicker untilDate,
-        NumberBox countBox)
+        TextBox countBox)
     {
         if (rule is null)
         {
@@ -558,7 +570,7 @@ public static class EventEditPopover
         else if (rule.Count is int count)
         {
             endsCombo.SelectedIndex = (int)EndsChoice.AfterN;
-            countBox.Value = count;
+            countBox.Text = count.ToString(System.Globalization.CultureInfo.InvariantCulture);
         }
         else
         {
@@ -571,7 +583,7 @@ public static class EventEditPopover
         ToggleButton[] dayChips,
         ComboBox endsCombo,
         DatePicker untilDate,
-        NumberBox countBox,
+        TextBox countBox,
         DateTime startUtc,
         DateTime endUtc)
     {
@@ -625,9 +637,15 @@ public static class EventEditPopover
                 break;
 
             case EndsChoice.AfterN:
-                var count = (int)Math.Round(countBox.Value);
-                if (count < 1)
-                    return (null, "Occurrence count must be at least 1.", false);
+                if (!int.TryParse(
+                        countBox.Text,
+                        System.Globalization.NumberStyles.Integer,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out var count)
+                    || count < 1)
+                {
+                    return (null, "Occurrence count must be a positive integer.", false);
+                }
                 rule = rule.WithCount(count);
                 break;
         }
@@ -643,7 +661,7 @@ public static class EventEditPopover
     {
         Text = text,
         FontSize = 12,
-        Foreground = new SolidColorBrush(Theme.Text2),
+        Foreground = Text2Brush,
         Margin = new Thickness(0, 2, 0, 0)
     };
 
