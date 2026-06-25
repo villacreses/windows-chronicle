@@ -19,7 +19,8 @@ public static class RecurrenceExpander
     public static IEnumerable<Event> Expand(
         Event master,
         DateTime rangeStartUtc,
-        DateTime rangeEndUtc)
+        DateTime rangeEndUtc,
+        IReadOnlyList<EventOverride>? overrides = null)
     {
         if (master.RecurrenceRule is null)
             yield break;
@@ -30,7 +31,41 @@ public static class RecurrenceExpander
             ? null
             : new HashSet<DateTime>(master.RecurrenceExDatesUtc);
 
-        int generated = 0; // counts toward COUNT (pre-EXDATE)
+        // Build the anchor lookup once per Expand call. Per-series
+        // override count is small in practice (rarely >10); per-anchor
+        // dictionary lookup keeps the inner loop O(1) regardless.
+        Dictionary<DateTime, EventOverride>? overrideByAnchor = null;
+        TimeSpan maxPastDisplacement = TimeSpan.Zero;
+        if (overrides is { Count: > 0 })
+        {
+            overrideByAnchor = new Dictionary<DateTime, EventOverride>(overrides.Count);
+            foreach (var ovr in overrides)
+            {
+                overrideByAnchor[ovr.OccurrenceAnchorUtc] = ovr;
+
+                // If an override's merged Start is BEFORE its anchor,
+                // it pulls a later anchor into an earlier render slot.
+                // Without extending the walk-termination gate, we'd
+                // stop iterating at rangeEnd and silently drop those
+                // pulled-back occurrences. Track the maximum backward
+                // displacement so the walk keeps going long enough.
+                if (ovr.StartTimeUtc is DateTime s && s < ovr.OccurrenceAnchorUtc)
+                {
+                    var displacement = ovr.OccurrenceAnchorUtc - s;
+                    if (displacement > maxPastDisplacement)
+                        maxPastDisplacement = displacement;
+                }
+            }
+        }
+
+        // Walk-termination range: usually rangeEndUtc, but extended by
+        // the largest backward displacement among the loaded overrides
+        // so an override that pulls a future anchor into the visible
+        // window is reached by the walker. COUNT and UNTIL termination
+        // are unchanged — they're rule semantics, not range semantics.
+        var walkEndUtc = rangeEndUtc + maxPastDisplacement;
+
+        int generated = 0; // counts toward COUNT (pre-EXDATE, pre-override)
         int safety = 0;
 
         foreach (var anchor in WalkAnchors(master.StartTimeUtc, rule))
@@ -46,40 +81,62 @@ public static class RecurrenceExpander
 
             generated++;
 
-            // Output-range filter — we don't break on `> rangeEndUtc`
-            // because BYDAY can emit several anchors per week, and the
-            // walk is monotonic per week but not per anchor across the
-            // week's BYDAY set. The WalkAnchors implementations bound
-            // their own iteration; this filter just skips out-of-range
-            // outputs.
-            if (anchor > rangeEndUtc)
+            if (anchor > walkEndUtc)
                 yield break;
 
+            // EXDATE wins over override: a cancelled occurrence stays
+            // cancelled even if an orphan override row points at the
+            // same anchor. See DECISIONS.md "Named invariants" #3 / #6.
             if (exdates is not null && exdates.Contains(anchor))
                 continue;
 
-            var end = anchor + duration;
+            EventOverride? overrideForAnchor = null;
+            overrideByAnchor?.TryGetValue(anchor, out overrideForAnchor);
+
+            // Merge override fields over projected fields. Null override
+            // fields inherit from master (canonical iCalendar semantics).
+            // End falls back to mergedStart + duration (not anchor +
+            // duration) so duration "follows the start" when only one
+            // side of the time range is overridden — the natural mental
+            // model for "I moved this meeting; the meeting kept its
+            // length." SeriesAnchorUtc on the emitted Event remains the
+            // original anchor — the identity primitive into the
+            // projection space, not the (possibly overridden) Start.
+            var start = overrideForAnchor?.StartTimeUtc ?? anchor;
+            var end = overrideForAnchor?.EndTimeUtc ?? (start + duration);
+
+            // Range filter on merged times: an override can move an
+            // occurrence out of the visible range from the rule's
+            // perspective, or into it from past the walk-end. The
+            // walk-termination extension above ensures we *reach* the
+            // anchor; this filter decides whether the merged result
+            // actually overlaps the visible window.
             if (end < rangeStartUtc)
                 continue;
+            if (start > rangeEndUtc)
+                continue;
 
-            yield return CloneAsOccurrence(master, anchor, end);
+            yield return CloneAsOccurrence(
+                master, anchor, start, end, overrideForAnchor);
         }
     }
 
     private static Event CloneAsOccurrence(
         Event master,
         DateTime anchorUtc,
-        DateTime endUtc)
+        DateTime startUtc,
+        DateTime endUtc,
+        EventOverride? ovr)
     {
         return new Event
         {
             Id              = master.Id,
             CalendarId      = master.CalendarId,
-            Title           = master.Title,
-            Description     = master.Description,
-            StartTimeUtc    = anchorUtc,
+            Title           = ovr?.Title ?? master.Title,
+            Description     = ovr?.Description ?? master.Description,
+            StartTimeUtc    = startUtc,
             EndTimeUtc      = endUtc,
-            IsAllDay        = master.IsAllDay,
+            IsAllDay        = ovr?.IsAllDay ?? master.IsAllDay,
 
             // Intentionally cleared on the occurrence — only the master
             // row carries the rule. Renderers see a plain Event.
@@ -87,11 +144,13 @@ public static class RecurrenceExpander
             RecurrenceExDatesUtc   = Array.Empty<DateTime>(),
             RecurrenceEndUtcCached = null,
 
-            // Marks the instance as "occurrence of series `Id`".
+            // Marks the instance as "occurrence of series `Id`". Stays
+            // the ORIGINAL anchor even when the override moved Start —
+            // EventKey identity is rule-walk-derived, not wall-clock.
             SeriesAnchorUtc = anchorUtc,
 
             CreatedAtUtc = master.CreatedAtUtc,
-            UpdatedAtUtc = master.UpdatedAtUtc,
+            UpdatedAtUtc = ovr?.UpdatedAtUtc ?? master.UpdatedAtUtc,
         };
     }
 

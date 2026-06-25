@@ -139,6 +139,56 @@ public sealed class OverrideRepository
     }
 
     /// <summary>
+    /// Bulk fetch of overrides for any of the given series, in a single
+    /// statement. Used by the load pipeline so the expander never issues
+    /// per-master queries — the caller groups by <c>SeriesEventId</c>
+    /// and passes the per-series slice into <c>Expand</c>.
+    ///
+    /// Filters by series id rather than anchor range deliberately. An
+    /// override could carry an anchor outside the load range but a
+    /// merged Start inside it (the user moved an occurrence across the
+    /// boundary). Filtering by anchor range would drop those silently;
+    /// filtering by series keeps them in the slice and lets the
+    /// expander's range check (on merged Start/End) decide.
+    ///
+    /// Empty input returns an empty list — avoids constructing an
+    /// invalid <c>IN ()</c> clause.
+    /// </summary>
+    public async Task<List<EventOverride>> GetForSeriesAsync(
+        IReadOnlyList<Guid> seriesEventIds)
+    {
+        if (seriesEventIds.Count == 0)
+            return new List<EventOverride>();
+
+        using var connection = AppDatabase.GetConnection();
+        using var command = connection.CreateCommand();
+
+        var paramNames = new string[seriesEventIds.Count];
+        for (int i = 0; i < seriesEventIds.Count; i++)
+            paramNames[i] = "$id" + i.ToString(CultureInfo.InvariantCulture);
+
+        command.CommandText =
+            "SELECT "
+            + "Id, SeriesEventId, OccurrenceAnchorUtc, "
+            + "Title, Description, StartTimeUtc, EndTimeUtc, IsAllDay, "
+            + "UpdatedAtUtc "
+            + "FROM EventOverrides "
+            + "WHERE SeriesEventId IN (" + string.Join(", ", paramNames) + ") "
+            + "ORDER BY SeriesEventId, OccurrenceAnchorUtc;";
+
+        for (int i = 0; i < seriesEventIds.Count; i++)
+            command.Parameters.AddWithValue(paramNames[i], seriesEventIds[i].ToString());
+
+        using var reader = await command.ExecuteReaderAsync();
+
+        var result = new List<EventOverride>();
+        while (await reader.ReadAsync())
+            result.Add(ReadOverride(reader));
+
+        return result;
+    }
+
+    /// <summary>
     /// Deletes every override for the given series. Used by the cascade
     /// in <see cref="EventRepository.DeleteAsync"/> and
     /// <see cref="CalendarRepository.DeleteAsync"/>. Idempotent.

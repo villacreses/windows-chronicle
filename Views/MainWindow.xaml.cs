@@ -24,6 +24,7 @@ namespace Chronicle
     {
         private readonly EventRepository _eventRepository = new();
         private readonly CalendarRepository _calendarRepository = new();
+        private readonly OverrideRepository _overrideRepository = new();
 
         private readonly SidebarRenderer _sidebarRenderer;
         private readonly CalendarGridRenderer _calendarGridRenderer;
@@ -753,25 +754,76 @@ namespace Chronicle
             if (rangeStart >= _loadedRangeStartUtc && rangeEnd <= _loadedRangeEndUtc)
                 return;
 
+            // Two queries per range change, regardless of master count.
+            // Visibility toggles and view switches inside the loaded range
+            // hit neither (the cache short-circuit above covers them).
             var rows = await _eventRepository.GetInRangeAsync(rangeStart, rangeEnd);
-            _projectedEvents = ExpandRecurrences(rows, rangeStart, rangeEnd);
+
+            var recurringMasterIds = new List<Guid>();
+            foreach (var row in rows)
+            {
+                if (row.RecurrenceRule is not null)
+                    recurringMasterIds.Add(row.Id);
+            }
+
+            var overrides = recurringMasterIds.Count == 0
+                ? new List<EventOverride>()
+                : await _overrideRepository.GetForSeriesAsync(recurringMasterIds);
+
+            var overridesBySeries = GroupOverridesBySeries(overrides);
+
+            _projectedEvents = ExpandRecurrences(
+                rows, rangeStart, rangeEnd, overridesBySeries);
             _loadedRangeStartUtc = rangeStart;
             _loadedRangeEndUtc = rangeEnd;
+        }
+
+        /// <summary>
+        /// Buckets a flat override list by <c>SeriesEventId</c> so the
+        /// expander can do an O(1) lookup per series. Allocates one list
+        /// per series with overrides; series without overrides are
+        /// absent from the dictionary (the expander treats absence as
+        /// "no overrides").
+        /// </summary>
+        private static Dictionary<Guid, IReadOnlyList<EventOverride>> GroupOverridesBySeries(
+            List<EventOverride> overrides)
+        {
+            if (overrides.Count == 0)
+                return new Dictionary<Guid, IReadOnlyList<EventOverride>>();
+
+            var result = new Dictionary<Guid, List<EventOverride>>();
+            foreach (var ovr in overrides)
+            {
+                if (!result.TryGetValue(ovr.SeriesEventId, out var bucket))
+                {
+                    bucket = new List<EventOverride>();
+                    result[ovr.SeriesEventId] = bucket;
+                }
+                bucket.Add(ovr);
+            }
+
+            var typed = new Dictionary<Guid, IReadOnlyList<EventOverride>>(result.Count);
+            foreach (var (k, v) in result)
+                typed[k] = v;
+            return typed;
         }
 
         /// <summary>
         /// Flattens repository rows into the projection that
         /// <see cref="_eventsByDate"/> ultimately groups: standalone rows pass
         /// through; recurring master rows are replaced by their expansions
-        /// over the load range. Masters never enter the result — only their
-        /// expansions do. Expansion is bounded by the active view's range
-        /// (≤ 42 days), so the per-call cost is small even for long-lived
-        /// series; it runs once per range change, not on visibility toggles.
+        /// over the load range, with any per-occurrence overrides for the
+        /// series merged in by the expander. Masters never enter the result
+        /// — only their expansions do. Expansion is bounded by the active
+        /// view's range (≤ 42 days), so the per-call cost is small even for
+        /// long-lived series; it runs once per range change, not on
+        /// visibility toggles.
         /// </summary>
         private static List<Event> ExpandRecurrences(
             List<Event> rows,
             DateTime rangeStartUtc,
-            DateTime rangeEndUtc)
+            DateTime rangeEndUtc,
+            IReadOnlyDictionary<Guid, IReadOnlyList<EventOverride>> overridesBySeries)
         {
             var result = new List<Event>(rows.Count);
 
@@ -783,8 +835,9 @@ namespace Chronicle
                     continue;
                 }
 
+                var seriesOverrides = overridesBySeries.GetValueOrDefault(row.Id);
                 foreach (var occurrence in
-                    RecurrenceExpander.Expand(row, rangeStartUtc, rangeEndUtc))
+                    RecurrenceExpander.Expand(row, rangeStartUtc, rangeEndUtc, seriesOverrides))
                 {
                     result.Add(occurrence);
                 }
