@@ -70,10 +70,12 @@ public sealed class CalendarRepository
     }
 
     /// <summary>
-    /// Deletes a calendar and all of its events in a single transaction.
-    /// Events are cascade-deleted here (rather than relying on a schema
-    /// ON DELETE CASCADE) so existing databases work without migration and
-    /// the foreign-key constraint is never violated. See DECISIONS.md.
+    /// Deletes a calendar, all of its events, and all of its events'
+    /// per-occurrence overrides in a single transaction. The cascade
+    /// runs from deepest dependent table outward so each FK constraint
+    /// is satisfied in turn (overrides → events → calendar). Lives in
+    /// the repository rather than a schema ON DELETE CASCADE — see
+    /// DECISIONS.md.
     /// </summary>
     public async Task DeleteAsync(Guid id)
     {
@@ -83,6 +85,9 @@ public sealed class CalendarRepository
         using var transaction = connection.BeginTransaction();
         try
         {
+            await OverrideRepository.DeleteForCalendarInTransactionAsync(
+                connection, transaction, id);
+
             using (var deleteEvents = connection.CreateCommand())
             {
                 deleteEvents.Transaction = transaction;

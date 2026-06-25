@@ -42,3 +42,28 @@ ON Events(CalendarId);
 -- ALTER TABLE adds the column). It cannot live here because this file
 -- runs before the migration step, and on a pre-recurrence DB the
 -- column does not yet exist.
+
+CREATE TABLE IF NOT EXISTS EventOverrides (
+    Id TEXT PRIMARY KEY,
+
+    SeriesEventId TEXT NOT NULL,
+    OccurrenceAnchorUtc TEXT NOT NULL,
+
+    -- Override fields (nullable = inherit from master).
+    Title TEXT,
+    Description TEXT,
+    StartTimeUtc TEXT,
+    EndTimeUtc TEXT,
+    IsAllDay INTEGER,
+
+    UpdatedAtUtc TEXT NOT NULL,
+
+    UNIQUE(SeriesEventId, OccurrenceAnchorUtc),
+    FOREIGN KEY (SeriesEventId) REFERENCES Events(Id)
+);
+
+CREATE INDEX IF NOT EXISTS IX_EventOverrides_SeriesEventId
+ON EventOverrides(SeriesEventId);
+
+CREATE INDEX IF NOT EXISTS IX_EventOverrides_OccurrenceAnchorUtc
+ON EventOverrides(OccurrenceAnchorUtc);
