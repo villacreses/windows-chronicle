@@ -31,21 +31,26 @@ public sealed class OverrideRepository
 
     /// <summary>
     /// Inserts or updates the override for
-    /// <c>(SeriesEventId, OccurrenceAnchorUtc)</c>. Conflict resolution
-    /// is row-level (SQLite ON CONFLICT DO UPDATE), so the row's <c>Id</c>
-    /// is preserved across updates — only the override fields and
-    /// <c>UpdatedAtUtc</c> change.
+    /// <c>(target.SeriesId, target.AnchorUtc)</c>. Conflict resolution
+    /// is row-level (SQLite ON CONFLICT DO UPDATE), so the row's
+    /// <c>Id</c> is preserved across updates — only the override fields
+    /// and <c>UpdatedAtUtc</c> change.
     ///
-    /// The anchor must equal a walker-emitted anchor of the series' rule
-    /// bit-for-bit; the write path persists <c>SeriesAnchorUtc</c>
-    /// verbatim from the projected occurrence (DECISIONS.md "Named
-    /// invariants" #3).
+    /// The target's <c>AnchorUtc</c> must equal a walker-emitted anchor
+    /// of the series' rule bit-for-bit; the UI write path threads
+    /// <c>SeriesAnchorUtc</c> through <see cref="EventRef.From"/>
+    /// verbatim, per DECISIONS.md "Named invariants" #3.
+    ///
+    /// The signature takes <see cref="EventRef.Occurrence"/> rather than
+    /// raw <c>(Guid, DateTime)</c> so the master-variant call is a
+    /// compile error rather than a runtime branch. This is the Phase 2A
+    /// landing of the wrapper-tripwire deal recorded in DECISIONS.md.
     /// </summary>
 #pragma warning disable CA1822 // Mark members as static
-    public async Task UpsertAsync(EventOverride ovr)
+    public async Task UpsertAsync(EventRef.Occurrence target, OverrideFields fields)
 #pragma warning restore CA1822 // Mark members as static
     {
-        ovr.Validate();
+        ValidateFields(target, fields);
 
         using var connection = AppDatabase.GetConnection();
         using var command = connection.CreateCommand();
@@ -83,20 +88,45 @@ public sealed class OverrideRepository
             UpdatedAtUtc  = excluded.UpdatedAtUtc;
         """;
 
-        command.Parameters.AddWithValue("$id", ovr.Id.ToString());
-        command.Parameters.AddWithValue("$seriesEventId", ovr.SeriesEventId.ToString());
-        command.Parameters.AddWithValue("$anchorUtc", ovr.OccurrenceAnchorUtc.ToString("O"));
-        command.Parameters.AddWithValue("$title", (object?)ovr.Title ?? DBNull.Value);
-        command.Parameters.AddWithValue("$description", (object?)ovr.Description ?? DBNull.Value);
+        // Id is generated for the insert case; on conflict the existing
+        // row's Id is preserved by ON CONFLICT DO UPDATE semantics.
+        command.Parameters.AddWithValue("$id", Guid.NewGuid().ToString());
+        command.Parameters.AddWithValue("$seriesEventId", target.SeriesId.ToString());
+        command.Parameters.AddWithValue("$anchorUtc", target.AnchorUtc.ToString("O"));
+        command.Parameters.AddWithValue("$title", (object?)fields.Title ?? DBNull.Value);
+        command.Parameters.AddWithValue("$description", (object?)fields.Description ?? DBNull.Value);
         command.Parameters.AddWithValue("$startTimeUtc",
-            ovr.StartTimeUtc is DateTime s ? s.ToString("O") : (object)DBNull.Value);
+            fields.StartTimeUtc is DateTime s ? s.ToString("O") : (object)DBNull.Value);
         command.Parameters.AddWithValue("$endTimeUtc",
-            ovr.EndTimeUtc is DateTime e ? e.ToString("O") : (object)DBNull.Value);
+            fields.EndTimeUtc is DateTime e ? e.ToString("O") : (object)DBNull.Value);
         command.Parameters.AddWithValue("$isAllDay",
-            ovr.IsAllDay is bool b ? (b ? 1 : 0) : (object)DBNull.Value);
-        command.Parameters.AddWithValue("$updatedAtUtc", ovr.UpdatedAtUtc.ToString("O"));
+            fields.IsAllDay is bool b ? (b ? 1 : 0) : (object)DBNull.Value);
+        command.Parameters.AddWithValue("$updatedAtUtc", DateTime.UtcNow.ToString("O"));
 
         await command.ExecuteNonQueryAsync();
+    }
+
+    private static void ValidateFields(EventRef.Occurrence target, OverrideFields fields)
+    {
+        if (target.AnchorUtc.Kind != DateTimeKind.Utc)
+            throw new InvalidOperationException(
+                "EventRef.Occurrence.AnchorUtc must be UTC.");
+
+        if (fields.StartTimeUtc is DateTime s && s.Kind != DateTimeKind.Utc)
+            throw new InvalidOperationException(
+                "OverrideFields.StartTimeUtc must be UTC when set.");
+
+        if (fields.EndTimeUtc is DateTime e && e.Kind != DateTimeKind.Utc)
+            throw new InvalidOperationException(
+                "OverrideFields.EndTimeUtc must be UTC when set.");
+
+        if (fields.StartTimeUtc is DateTime ss
+            && fields.EndTimeUtc is DateTime ee
+            && ee < ss)
+        {
+            throw new InvalidOperationException(
+                "Override end time cannot be before override start time.");
+        }
     }
 
     /// <summary>
