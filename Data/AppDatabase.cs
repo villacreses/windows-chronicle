@@ -99,6 +99,14 @@ public static class AppDatabase
             add.ExecuteNonQuery();
         }
 
+        if (!columns.Contains("TimeZoneId"))
+        {
+            using var add = connection.CreateCommand();
+            add.CommandText =
+                "ALTER TABLE Events ADD COLUMN TimeZoneId TEXT;";
+            add.ExecuteNonQuery();
+        }
+
         // Always ensure the index exists — covers fresh installs (column
         // came in via CREATE TABLE) and migrated DBs alike. Idempotent.
         // Lives here, not in Schema.sql, because Schema.sql runs before

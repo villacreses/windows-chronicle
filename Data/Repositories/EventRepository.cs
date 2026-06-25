@@ -74,6 +74,7 @@ public sealed class EventRepository
             RecurrenceRule,
             RecurrenceExDatesUtc,
             RecurrenceEndUtcCached,
+            TimeZoneId,
             CreatedAtUtc,
             UpdatedAtUtc
         )
@@ -88,6 +89,7 @@ public sealed class EventRepository
             $recurrenceRule,
             $recurrenceExDates,
             $recurrenceEndUtcCached,
+            $timeZoneId,
             $createdAtUtc,
             $updatedAtUtc
         );
@@ -129,6 +131,7 @@ public sealed class EventRepository
             RecurrenceRule         = $recurrenceRule,
             RecurrenceExDatesUtc   = $recurrenceExDates,
             RecurrenceEndUtcCached = $recurrenceEndUtcCached,
+            TimeZoneId             = $timeZoneId,
             UpdatedAtUtc           = $updatedAtUtc
         WHERE Id = $id;
         """;
@@ -175,6 +178,8 @@ public sealed class EventRepository
             (object?)evt.RecurrenceRule ?? DBNull.Value);
         command.Parameters.AddWithValue("$recurrenceExDates",
             (object?)SerializeExDates(evt.RecurrenceExDatesUtc) ?? DBNull.Value);
+        command.Parameters.AddWithValue("$timeZoneId",
+            (object?)evt.TimeZoneId ?? DBNull.Value);
         command.Parameters.AddWithValue("$recurrenceEndUtcCached",
             evt.RecurrenceEndUtcCached is DateTime end
                 ? end.ToString("O")
@@ -256,6 +261,7 @@ public sealed class EventRepository
             RecurrenceRule,
             RecurrenceExDatesUtc,
             RecurrenceEndUtcCached,
+            TimeZoneId,
             CreatedAtUtc,
             UpdatedAtUtc
         FROM Events
@@ -289,8 +295,9 @@ public sealed class EventRepository
             RecurrenceEndUtcCached = reader.IsDBNull(9)
                 ? null
                 : ParseUtcDateTime(reader.GetString(9)),
-            CreatedAtUtc = ParseUtcDateTime(reader.GetString(10)),
-            UpdatedAtUtc = ParseUtcDateTime(reader.GetString(11)),
+            TimeZoneId = reader.IsDBNull(10) ? null : reader.GetString(10),
+            CreatedAtUtc = ParseUtcDateTime(reader.GetString(11)),
+            UpdatedAtUtc = ParseUtcDateTime(reader.GetString(12)),
         };
     }
 
@@ -323,6 +330,7 @@ public sealed class EventRepository
             RecurrenceRule,
             RecurrenceExDatesUtc,
             RecurrenceEndUtcCached,
+            TimeZoneId,
             CreatedAtUtc,
             UpdatedAtUtc
         FROM Events

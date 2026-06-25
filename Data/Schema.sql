@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS Events (
     RecurrenceRule TEXT,
     RecurrenceExDatesUtc TEXT,
     RecurrenceEndUtcCached TEXT,
+    TimeZoneId TEXT,
 
     CreatedAtUtc TEXT NOT NULL,
     UpdatedAtUtc TEXT NOT NULL,

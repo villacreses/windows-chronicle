@@ -51,6 +51,38 @@ public static class EventEditPopover
     private static readonly SolidColorBrush DangerBrush   = new(Theme.Danger);
 
     /// <summary>
+    /// Phase 2B: derives an IANA timezone id for the recurrence anchor
+    /// frame of a newly-created recurring event. Called only on the
+    /// create path — edits preserve the master's existing TimeZoneId.
+    ///
+    /// "Always IANA" invariant at the write boundary: on Windows,
+    /// <c>TimeZoneInfo.Local.Id</c> surfaces a Windows id (e.g.
+    /// "Pacific Standard Time"), which we convert via
+    /// <c>TryConvertWindowsIdToIanaId</c>. On non-Windows the id is
+    /// already IANA and we verify it via <c>TryConvertIanaIdToWindowsId</c>
+    /// (reverse direction); both calls failing means the local zone is
+    /// neither form we can map, in which case we degrade to UTC and log
+    /// rather than silently persist an unmapped string. The escape
+    /// hatch cannot weaken the IANA invariant — only the user's
+    /// experience for that one zone.
+    /// </summary>
+    private static string GetDefaultRecurringTimeZoneId()
+    {
+        var local = TimeZoneInfo.Local.Id;
+
+        if (TimeZoneInfo.TryConvertWindowsIdToIanaId(local, out var iana))
+            return iana;
+
+        if (TimeZoneInfo.TryConvertIanaIdToWindowsId(local, out _))
+            return local;
+
+        System.Diagnostics.Debug.WriteLine(
+            $"Local timezone '{local}' resolves to neither IANA nor "
+            + "Windows; falling back to UTC for new recurring events.");
+        return "UTC";
+    }
+
+    /// <summary>
     /// Shows the create-event popover anchored to <paramref name="anchorElement"/>.
     /// Defaults: <paramref name="suggestedStartTime"/> for one hour, the first
     /// available calendar selected, does-not-repeat. Returns the new
@@ -88,6 +120,12 @@ public static class EventEditPopover
                     RecurrenceRule = recurrence?.Rule.ToRruleString(),
                     RecurrenceExDatesUtc = Array.Empty<DateTime>(),
                     RecurrenceEndUtcCached = recurrence?.EndUtcCached,
+                    // Phase 2B: new recurring events anchor to the system's
+                    // current IANA zone. Non-recurring events leave the
+                    // column null (a fixed UTC moment has no anchor zone).
+                    TimeZoneId = recurrence is null
+                        ? null
+                        : GetDefaultRecurringTimeZoneId(),
                     CreatedAtUtc = nowUtc,
                     UpdatedAtUtc = nowUtc
                 };
@@ -150,6 +188,19 @@ public static class EventEditPopover
                     ? Array.Empty<DateTime>()
                     : preservedExDates,
                 RecurrenceEndUtcCached = recurrence?.EndUtcCached,
+                // Phase 2B TimeZoneId policy:
+                //   - no recurrence on save → null (non-recurring).
+                //   - newly added recurrence (eventToEdit had no rule) →
+                //     default to the system zone; this is the "becoming
+                //     recurring" path, treated as create-time anchoring.
+                //   - already recurring → preserve. Could be null (legacy
+                //     UTC-anchored series stay legacy — see DECISIONS.md,
+                //     no auto-migration), or a real IANA zone.
+                TimeZoneId = recurrence is null
+                    ? null
+                    : eventToEdit.RecurrenceRule is null
+                        ? GetDefaultRecurringTimeZoneId()
+                        : eventToEdit.TimeZoneId,
                 CreatedAtUtc = eventToEdit.CreatedAtUtc,
                 UpdatedAtUtc = DateTime.UtcNow
             });
