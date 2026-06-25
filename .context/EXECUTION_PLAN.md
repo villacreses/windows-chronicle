@@ -20,6 +20,8 @@ Build the complete provider-agnostic calendar experience before beginning accoun
 - Date Selection experience (selected-day panel + click/double-click model)
 - Week View (first additional view, built on the selection model)
 - Day View (single-day 24h timeline, built on the same selection model)
+- Recurrence Phase 1 (engine + skip-this-occurrence via EXDATE)
+- Recurrence Phase 2A (occurrence overrides + scope picker + `EventRef`)
 
 ### UI CONSTRAINT (TEMPORARY)
 
@@ -34,27 +36,67 @@ No UI polish work should be introduced outside of Theme infrastructure stability
 
 ## Current Milestone
 
-Recurrence — Phase 1 (recurrence engine + skip-occurrence)
+Recurrence — Phase 2B (wall-clock anchoring / DST drift fix)
 
 See `DECISIONS.md` → "Recurrence: RRULE Canonical Form, Two-Phase
-Rollout" for scope and rationale.
+Rollout" → "Phase 2B" for scope and rationale.
 
-Phase 1 sub-steps:
+Phase 2B sub-steps:
 
-1. Engine foundation — schema migration, `Event` model fields,
-   `RecurrenceRule` value object + RFC 5545 parser,
-   `RecurrenceExpander`, `EventRepository` I/O for the new columns.
-   *(No visible UI change yet — recurring events still don't expand
-   end-to-end.)*
-2. Expansion integration — `LoadEventsAsync` runs the expander before
-   the GroupBy step that produces `_eventsByDate`. Recurring events now
-   render across all matching days in Month / Week / Day.
-3. Editor + delete dialog — Repeats picker in `EventEditPopover`
-   (preset patterns only), recurring-event banner on edit, "Skip this
-   occurrence" branch in the delete confirmation.
+1. Schema + model — `TimeZoneId TEXT NULL` column on `Events`,
+   forward-only migration step in `AppDatabase`, new recurring events
+   default `TimeZoneId` to the system's current IANA zone, existing
+   recurring rows stay NULL (legacy UTC anchoring).
+2. Expander — tz-aware branch inside `WalkAnchors` when `TimeZoneId`
+   is non-null: walk in local time, project each anchor to UTC at
+   emission. The NULL (legacy) path is unchanged. Pipeline shape and
+   all named invariants stay intact; the new branch is a strategy
+   variation, not a semantic shift.
 
-Phase 2 (occurrence mutation) follows once Phase 1 has shipped and
-proven the engine.
+After 2B ships, recurrence is considered complete for the purposes of
+"Definition of Ready for Integrations" — the documented deferrals
+(this-and-following scope, automatic orphan reconciliation, RRULE
+expressiveness) remain backlog items, not blockers.
+
+## Recently Completed: Recurrence Phase 2A
+
+Delivered:
+
+- `EventOverrides` table with FK to `Events`, unique
+  `(SeriesEventId, OccurrenceAnchorUtc)`, indexes on both lookup
+  columns. New table only — no column-add ordering hazard.
+- `OverrideRepository`: `UpsertAsync(EventRef.Occurrence, OverrideFields)`
+  (SQLite ON CONFLICT DO UPDATE on the unique key); bulk
+  `GetForSeriesAsync(IReadOnlyList<Guid>)` for the load pipeline;
+  cascade helpers used by `EventRepository.DeleteAsync` and
+  `CalendarRepository.DeleteAsync`.
+- Expander gains an override-merge step joined to the existing
+  per-anchor pipeline (after EXDATE filter, before merged-range gate).
+  Walk-termination extended by `maxPastDisplacement` so overrides
+  that pull future anchors back into the visible window are reached.
+- `EventRef` discriminated identity primitive (`Master(Guid)` /
+  `Occurrence(Guid SeriesId, DateTime AnchorUtc)`) at mutation
+  boundaries; the wrapper-tripwire deal from Phase 1's "Tolerated
+  ambiguity" landed here.
+- Scope picker on edit (This event / All events); occurrence-edit
+  popover (stripped form); save dispatch via `EventRef.From`.
+
+## Recently Completed: Recurrence Phase 1
+
+Delivered:
+
+- RRULE storage (RFC 5545) + parser + value object.
+- `RecurrenceExpander` (Daily / Weekly / Monthly / Yearly, INTERVAL,
+  COUNT / UNTIL, weekly BYDAY); pure static; in-memory transient
+  occurrences; no persistence.
+- Expansion runs before `_eventsByDate` is built; renderers stay
+  unaware of recurrence.
+- EXDATE handling — "Skip this occurrence" via the delete dialog.
+- `EventKey` read-side identity primitive; `EventRepository
+  .RefuseOccurrence` chokepoint guard at the persistence boundary.
+- Repeats picker in `EventEditPopover` (preset patterns: Daily /
+  Weekly with day chips / Monthly on day-of-month / Yearly; Ends:
+  Never / On date / After N).
 
 ## Recently Completed: Day View
 
@@ -119,17 +161,16 @@ Delivered:
 
 ## Next Milestones
 
-### Recurrence
+After Phase 2B:
 
-- Recurrence editing
-- Recurrence rendering
-
-## Provider Integration Phase
-
-After local UX is mature:
+### Provider Integration Phase
 
 - Google Calendar
 - Outlook Calendar
+
+### Design Overhaul
+
+Replaces the dev-only dark-theme override (see DECISIONS.md).
 
 ## Definition of Ready for Integrations
 
@@ -139,4 +180,4 @@ Before Google integration begins:
 - Week view complete
 - Day view complete
 - Calendar management complete
-- Recurrence complete
+- Recurrence complete (Phase 1 + Phase 2A + Phase 2B)

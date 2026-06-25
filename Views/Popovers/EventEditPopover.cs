@@ -24,12 +24,14 @@ namespace Chronicle.Views.Popovers;
 /// <see cref="ShowEditEventAsync"/> return the resulting <see cref="Event"/> on
 /// save, or <c>null</c> if the popover is cancelled or light-dismissed.
 ///
-/// Recurring-event semantics (Phase 1): editing a series here updates the
-/// master row in place. A banner above the form names this. The "this event
-/// only" scope is deferred to Phase 2 (see DECISIONS.md). The popover never
-/// receives an occurrence — callers load the master before invoking
-/// <see cref="ShowEditEventAsync"/>; this matches the persistence boundary
-/// enforced by <c>EventRepository.RefuseOccurrence</c>.
+/// Recurring-event semantics: <see cref="ShowEditEventAsync"/> edits the
+/// master row (All-events scope) — callers load the master before invoking
+/// it; this matches the persistence boundary enforced by
+/// <c>EventRepository.RefuseOccurrence</c>. The Phase 2A
+/// <see cref="ShowEditOccurrenceAsync"/> entry handles the
+/// This-event-only scope — pre-fills from the occurrence's merged values,
+/// hides Calendar / Repeats, and returns an <see cref="Event"/> the caller
+/// converts to <c>OverrideFields</c> for the override write path.
 ///
 /// The popover performs no persistence — it only constructs and returns the
 /// <see cref="Event"/>; the caller saves it via the event repository.
@@ -151,6 +153,170 @@ public static class EventEditPopover
                 CreatedAtUtc = eventToEdit.CreatedAtUtc,
                 UpdatedAtUtc = DateTime.UtcNow
             });
+    }
+
+    /// <summary>
+    /// Shows the occurrence-scoped edit popover for the This-event branch
+    /// of the scope picker. Pre-fills from <paramref name="occurrence"/>'s
+    /// merged values (which already reflect any prior override) and exposes
+    /// a stripped form — no Calendar, no Repeats picker, no recurring banner.
+    /// The recurrence rule is series-level; an occurrence-scoped edit cannot
+    /// change it.
+    ///
+    /// Returns an <see cref="Event"/> carrying the edited values, or
+    /// <c>null</c> if dismissed. The caller (<c>MainWindow</c>) converts the
+    /// returned values into <c>OverrideFields</c> and writes via
+    /// <c>OverrideRepository.UpsertAsync</c>; the returned Event itself is
+    /// never persisted (a persistence-boundary attempt would be refused by
+    /// <c>RefuseOccurrence</c>, since we attach <c>SeriesAnchorUtc</c>).
+    /// </summary>
+    public static Task<Event?> ShowEditOccurrenceAsync(
+        FrameworkElement anchorElement,
+        Event occurrence,
+        FlyoutPlacementMode placement = FlyoutPlacementMode.RightEdgeAlignedTop)
+    {
+        if (!occurrence.IsOccurrence)
+        {
+            throw new ArgumentException(
+                "ShowEditOccurrenceAsync requires an expanded occurrence "
+                + "(SeriesAnchorUtc set). Use ShowEditEventAsync for masters "
+                + "and standalones.",
+                nameof(occurrence));
+        }
+
+        var tcs = new TaskCompletionSource<Event?>();
+
+        var root = new StackPanel
+        {
+            Orientation = Orientation.Vertical,
+            Width = FormWidth,
+            Spacing = 10
+        };
+
+        root.Children.Add(new TextBlock
+        {
+            Text = "Edit this occurrence",
+            FontSize = 16,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = TextBrush,
+            Margin = new Thickness(0, 0, 0, 2)
+        });
+
+        // Name
+        var nameBox = new TextBox
+        {
+            PlaceholderText = "Event title",
+            Text = occurrence.Title,
+            TextWrapping = TextWrapping.Wrap
+        };
+        root.Children.Add(MakeLabel("Name"));
+        root.Children.Add(nameBox);
+
+        // Start
+        var initialStartLocal = occurrence.StartTimeUtc.ToLocalTime();
+        var initialEndLocal = occurrence.EndTimeUtc.ToLocalTime();
+
+        var startDate = new DatePicker { Date = new DateTimeOffset(initialStartLocal) };
+        var startTime = new TimePicker { Time = initialStartLocal.TimeOfDay };
+        root.Children.Add(MakeLabel("Start"));
+        root.Children.Add(MakeDateTimeRow(startDate, startTime));
+
+        // End
+        var endDate = new DatePicker { Date = new DateTimeOffset(initialEndLocal) };
+        var endTime = new TimePicker { Time = initialEndLocal.TimeOfDay };
+        root.Children.Add(MakeLabel("End"));
+        root.Children.Add(MakeDateTimeRow(endDate, endTime));
+
+        var errorBlock = new TextBlock
+        {
+            Foreground = DangerBrush,
+            TextWrapping = TextWrapping.Wrap,
+            Visibility = Visibility.Collapsed
+        };
+        root.Children.Add(errorBlock);
+
+        var saveButton = new Button
+        {
+            Content = "Save",
+            Style = Application.Current.Resources["AccentButtonStyle"] as Style
+        };
+        var cancelButton = new Button { Content = "Cancel" };
+
+        var buttonRow = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Spacing = 8,
+            Margin = new Thickness(0, 4, 0, 0)
+        };
+        buttonRow.Children.Add(saveButton);
+        buttonRow.Children.Add(cancelButton);
+        root.Children.Add(buttonRow);
+
+        var flyout = new Flyout
+        {
+            Content = root,
+            Placement = placement
+        };
+
+        saveButton.Click += (s, e) =>
+        {
+            var title = nameBox.Text?.Trim();
+            if (string.IsNullOrEmpty(title))
+            {
+                Fail(errorBlock, "Event name is required.");
+                return;
+            }
+
+            var startUtc = DateHelpers.CombineLocalDateAndTimeAsUtc(
+                startDate.Date.Date, startTime.Time);
+            var endUtc = DateHelpers.CombineLocalDateAndTimeAsUtc(
+                endDate.Date.Date, endTime.Time);
+
+            if (startUtc >= endUtc)
+            {
+                Fail(errorBlock, "End time must be after start time.");
+                return;
+            }
+
+            // The returned Event carries the edited values plus
+            // SeriesAnchorUtc + Id so the caller can route the write
+            // (Id = master id by the identity contract; SeriesAnchorUtc =
+            // the anchor of this occurrence). Calendar / Description /
+            // IsAllDay / recurrence fields are unchanged from the source
+            // occurrence — the caller will discard the ones the override
+            // doesn't carry and treat the rest as inherit-from-master.
+            var result = new Event
+            {
+                Id = occurrence.Id,
+                CalendarId = occurrence.CalendarId,
+                Title = title,
+                StartTimeUtc = startUtc,
+                EndTimeUtc = endUtc,
+                Description = occurrence.Description,
+                IsAllDay = occurrence.IsAllDay,
+                RecurrenceRule = null,
+                RecurrenceExDatesUtc = Array.Empty<DateTime>(),
+                RecurrenceEndUtcCached = null,
+                SeriesAnchorUtc = occurrence.SeriesAnchorUtc,
+                CreatedAtUtc = occurrence.CreatedAtUtc,
+                UpdatedAtUtc = DateTime.UtcNow
+            };
+
+            tcs.TrySetResult(result);
+            flyout.Hide();
+        };
+
+        cancelButton.Click += (s, e) =>
+        {
+            tcs.TrySetResult(null);
+            flyout.Hide();
+        };
+
+        flyout.Closed += (s, e) => tcs.TrySetResult(null);
+        flyout.ShowAt(anchorElement);
+
+        return tcs.Task;
     }
 
     private static RecurrenceRule? TryParseRule(string? rrule)

@@ -290,6 +290,12 @@ change to the projection space and requires data migration.
    per-occurrence discriminator. `Event.Id` is unique among rows in the
    `Events` table but NOT among in-memory `Event` instances. Code that
    needs a key over a mixed collection must use `EventKey.For(evt)`.
+   *Post-Phase-2A corollary:* `SeriesAnchorUtc` and `StartTimeUtc` may
+   differ on the same occurrence — an override can move the displayed
+   wall-clock Start while identity stays on the rule-walk anchor. Any
+   write keyed on "this occurrence" (EXDATE append, override upsert,
+   future scope-picker routes) must use `SeriesAnchorUtc`, not
+   `StartTimeUtc`. `EventRef.From(evt)` constructs the correct key.
 2. **Identity stability is rule-version conditional.** `EventKey` is
    stable across loads, view switches, and cache lifecycle — but only
    within a single recurrence rule version. Semantic changes to RRULE
@@ -329,20 +335,49 @@ change to the projection space and requires data migration.
 - Create / edit / delete entire series; preset-pattern recurrence editor
 - Banner on recurring-event edit: "Changes apply to all occurrences"
 
-**Phase 2 — occurrence mutation and tz-aware anchoring:**
+**Phase 2A — occurrence mutation:**
 
 - `EventOverrides` table (a *divergence* — one occurrence with edited
-  fields)
-- "Edit this event" scope
-- Scope picker (this / all / this-and-following)
-- Override reconciliation when the master rule changes
+  fields). Per-field nullable, null = inherit from master at expansion
+  time. No `IsCancelled` column; EXDATE handles cancellation
+  atomically on the master.
+- `EventRef` discriminated identity primitive (`Master(Guid)` /
+  `Occurrence(Guid SeriesId, DateTime AnchorUtc)`) at mutation
+  boundaries only. Lands the wrapper-tripwire deal from the section
+  below — see "Phase 2A landing" there.
+- Scope picker on edit (This event / All events). "This event" writes
+  an override via `OverrideRepository.UpsertAsync(EventRef.Occurrence,
+  OverrideFields)`; "All events" updates the master.
+- Expander gains an override-merge step joined to the existing
+  per-anchor pipeline (after EXDATE filter, before merged-range gate).
+  Walk termination is extended by `maxPastDisplacement` so overrides
+  that pull future anchors back into the visible window are reached.
+
+**Phase 2B — wall-clock anchoring (DST drift fix):**
+
+- `TimeZoneId` column on `Events`. NULL = legacy UTC anchoring;
+  non-null = local-time anchoring in the named IANA zone.
+- Tz-aware branch inside `WalkAnchors`: walk in local time, project
+  each anchor to UTC at emission. Legacy NULL path unchanged.
+- New recurring events default `TimeZoneId` to the system's current
+  zone; existing recurring rows stay NULL.
+- See "UTC anchoring is a Phase 1 constraint" below for the product
+  rationale.
+
+**Deferred from the original Phase 2 list:**
+
+- This-and-following scope (introduces series fission with EXDATE /
+  override migration rules; not built on evidence of user need).
+- Override reconciliation on master rule changes (orphans are silently
+  ignored at expansion per invariant #2; auto-reconciliation isn't
+  worth the UX surface).
 - Ordinal BYDAY, multi-value BYMONTHDAY, RDATE, custom RRULE input
-- Wall-clock anchoring (see below)
+  (RRULE expressiveness, separate from occurrence mutation).
 
 The split is built around a single insight: EXDATE creates a hole; an
 override creates a divergence that must be tracked and merged forever.
-Those are different complexity classes and don't belong in the same
-milestone.
+Phase 2A and 2B are independent concerns sharing no pipeline; both
+touch the expander walk, so doing one at a time concentrates risk.
 
 ### UTC anchoring is a Phase 1 constraint, not a product position
 
@@ -394,6 +429,52 @@ at branching mutation paths.
 Until one of those triggers fires, the chokepoint + discriminator
 approach is the accepted answer. The deal is recorded here so any
 future revisit lands on the same evidence both sides agreed to.
+
+**Phase 2A landing (trigger fired).** The override-save handler in
+Phase 2A is the third mutation site the second trigger named. The
+resolution is `EventRef` — a discriminated identity primitive
+(`Master(Guid)` / `Occurrence(Guid SeriesId, DateTime AnchorUtc)`)
+introduced at mutation boundaries *only*. Renderers and the projection
+cache stay on plain `Event`; the wrapper does not propagate. The
+existing two `IsOccurrence` mutation branches (edit, delete) and the
+new third one (override save) are now `EventRef`-typed pattern
+dispatches; `OverrideRepository.UpsertAsync(EventRef.Occurrence,
+OverrideFields)` makes the master-variant call a compile error. The
+narrower form was chosen over the original full-wrapper proposal
+because the edit-path benefit (preserving occurrence-launch context
+across the popover boundary) is concentrated at mutation entry, not
+in renderer signatures.
+
+### Tolerated ambiguity (Phase 2A)
+
+Two corners we deliberately don't enforce in Phase 2A, with the
+expectation that the write-path UX prevents normal user paths from
+producing them.
+
+**Merge validity is not enforced post-merge.** `EventOverride.Validate`
+catches `End < Start` only when both override times are set. The
+expander does not re-validate the merged Event before emitting. A
+malformed override smuggled in via direct SQL (or a future writer that
+bypasses the editor's validation) can produce an emitted occurrence
+with `End < Start`, or `IsAllDay = true` paired with non-zero Start/End
+times. Renderer behavior on such malformed merges is undefined. The
+editor form's own validation prevents normal user paths from producing
+these. Acceptable for MVP; revisit if a non-UI writer is introduced.
+
+**Master-loading gap for cross-boundary overrides.** Override
+completeness within the loaded master set is explicit (see invariant
+#3 / "Override loading shape" in the sub-step 2 commit). But masters
+themselves may be filtered out by `EventRepository.GetInRangeAsync`
+based on the master's natural boundaries (`StartTimeUtc > rangeEnd` or
+`RecurrenceEndUtcCached < rangeStart`). If an override on such a
+filtered-out master would pull an occurrence into the visible window,
+that occurrence is silently dropped — the master isn't loaded, so its
+overrides aren't queried, so the displacement isn't computed. Both
+ends of the gap require the user to have moved an occurrence across
+the master's *natural* boundary, which is unusual. The fix is a
+two-pass load (query candidate overrides first, then load masters
+including those referenced) and is deferred until a user actually hits
+the limitation.
 
 ---
 
