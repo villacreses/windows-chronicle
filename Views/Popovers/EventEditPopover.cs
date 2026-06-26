@@ -108,6 +108,17 @@ public static class EventEditPopover
             buildEvent: (title, calendarId, startUtc, endUtc, recurrence) =>
             {
                 var nowUtc = DateTime.UtcNow;
+                // Phase 2B: TimeZoneId is resolved here (where we know
+                // we're on the create path) and threaded into
+                // ComputeEndUtc so the cached end is computed under the
+                // same walk strategy the renderer will use.
+                var tzId = recurrence is null
+                    ? null
+                    : GetDefaultRecurringTimeZoneId();
+                var cachedEnd = recurrence is null
+                    ? null
+                    : RecurrenceExpander.ComputeEndUtc(
+                        startUtc, endUtc - startUtc, recurrence, tzId);
                 return new Event
                 {
                     Id = Guid.NewGuid(),
@@ -117,15 +128,10 @@ public static class EventEditPopover
                     EndTimeUtc = endUtc,
                     Description = null,
                     IsAllDay = false,
-                    RecurrenceRule = recurrence?.Rule.ToRruleString(),
+                    RecurrenceRule = recurrence?.ToRruleString(),
                     RecurrenceExDatesUtc = Array.Empty<DateTime>(),
-                    RecurrenceEndUtcCached = recurrence?.EndUtcCached,
-                    // Phase 2B: new recurring events anchor to the system's
-                    // current IANA zone. Non-recurring events leave the
-                    // column null (a fixed UTC moment has no anchor zone).
-                    TimeZoneId = recurrence is null
-                        ? null
-                        : GetDefaultRecurringTimeZoneId(),
+                    RecurrenceEndUtcCached = cachedEnd,
+                    TimeZoneId = tzId,
                     CreatedAtUtc = nowUtc,
                     UpdatedAtUtc = nowUtc
                 };
@@ -171,23 +177,8 @@ public static class EventEditPopover
             selectedCalendarId: eventToEdit.CalendarId,
             initialRecurrence: initialRecurrence,
             showRecurringBanner: initialRecurrence is not null,
-            buildEvent: (title, calendarId, startUtc, endUtc, recurrence) => new Event
+            buildEvent: (title, calendarId, startUtc, endUtc, recurrence) =>
             {
-                Id = eventToEdit.Id,
-                CalendarId = calendarId,
-                Title = title,
-                StartTimeUtc = startUtc,
-                EndTimeUtc = endUtc,
-                Description = eventToEdit.Description,
-                IsAllDay = eventToEdit.IsAllDay,
-                RecurrenceRule = recurrence?.Rule.ToRruleString(),
-                // Preserve EXDATEs when the series remains recurring; clear
-                // them if the user removed recurrence entirely (the projection
-                // space they pointed into no longer exists).
-                RecurrenceExDatesUtc = recurrence is null
-                    ? Array.Empty<DateTime>()
-                    : preservedExDates,
-                RecurrenceEndUtcCached = recurrence?.EndUtcCached,
                 // Phase 2B TimeZoneId policy:
                 //   - no recurrence on save → null (non-recurring).
                 //   - newly added recurrence (eventToEdit had no rule) →
@@ -196,13 +187,42 @@ public static class EventEditPopover
                 //   - already recurring → preserve. Could be null (legacy
                 //     UTC-anchored series stay legacy — see DECISIONS.md,
                 //     no auto-migration), or a real IANA zone.
-                TimeZoneId = recurrence is null
+                var tzId = recurrence is null
                     ? null
                     : eventToEdit.RecurrenceRule is null
                         ? GetDefaultRecurringTimeZoneId()
-                        : eventToEdit.TimeZoneId,
+                        : eventToEdit.TimeZoneId;
+
+                // EndUtcCached is computed here so it always matches the
+                // walk strategy the renderer will use (tz-aware vs.
+                // legacy UTC). Drift between the two paths would surface
+                // as the range query incorrectly pruning a series.
+                var cachedEnd = recurrence is null
+                    ? null
+                    : RecurrenceExpander.ComputeEndUtc(
+                        startUtc, endUtc - startUtc, recurrence, tzId);
+
+                return new Event
+                {
+                Id = eventToEdit.Id,
+                CalendarId = calendarId,
+                Title = title,
+                StartTimeUtc = startUtc,
+                EndTimeUtc = endUtc,
+                Description = eventToEdit.Description,
+                IsAllDay = eventToEdit.IsAllDay,
+                RecurrenceRule = recurrence?.ToRruleString(),
+                // Preserve EXDATEs when the series remains recurring; clear
+                // them if the user removed recurrence entirely (the projection
+                // space they pointed into no longer exists).
+                RecurrenceExDatesUtc = recurrence is null
+                    ? Array.Empty<DateTime>()
+                    : preservedExDates,
+                RecurrenceEndUtcCached = cachedEnd,
+                TimeZoneId = tzId,
                 CreatedAtUtc = eventToEdit.CreatedAtUtc,
                 UpdatedAtUtc = DateTime.UtcNow
+                };
             });
     }
 
@@ -378,16 +398,11 @@ public static class EventEditPopover
         catch (FormatException) { return null; }
     }
 
-    /// <summary>
-    /// Parsed recurrence values flowing from the form to <c>buildEvent</c>.
-    /// <see cref="EndUtcCached"/> is null when the rule is infinite (no
-    /// COUNT, no UNTIL); otherwise it is computed via
-    /// <see cref="RecurrenceExpander.ComputeEndUtc"/> on save so the range
-    /// query can prune ended finite series.
-    /// </summary>
-    private readonly record struct RecurrenceSelection(
-        RecurrenceRule Rule,
-        DateTime? EndUtcCached);
+    // RecurrenceSelection (a wrapper over (Rule, EndUtcCached)) was
+    // removed in Phase 2B sub-step 2: EndUtcCached now depends on
+    // TimeZoneId, which is only known inside buildEvent. The picker
+    // returns just the rule; buildEvent computes the cached end via
+    // ComputeEndUtc with the appropriate TimeZoneId.
 
     // ── Shared implementation ─────────────────────────────────────────────
 
@@ -402,7 +417,7 @@ public static class EventEditPopover
         Guid? selectedCalendarId,
         RecurrenceRule? initialRecurrence,
         bool showRecurringBanner,
-        Func<string, Guid, DateTime, DateTime, RecurrenceSelection?, Event> buildEvent)
+        Func<string, Guid, DateTime, DateTime, RecurrenceRule?, Event> buildEvent)
     {
         var tcs = new TaskCompletionSource<Event?>();
 
@@ -537,7 +552,7 @@ public static class EventEditPopover
         DatePicker endDate,
         TimePicker endTime,
         RecurrencePicker recurrencePicker,
-        Func<string, Guid, DateTime, DateTime, RecurrenceSelection?, Event> buildEvent,
+        Func<string, Guid, DateTime, DateTime, RecurrenceRule?, Event> buildEvent,
         TextBlock errorBlock,
         out Event? result)
     {
@@ -618,15 +633,15 @@ public static class EventEditPopover
     private sealed class RecurrencePicker
     {
         public required StackPanel Root { get; init; }
-        public required Func<DateTime, DateTime, (RecurrenceSelection? selection, string? error, bool ok)>
+        public required Func<DateTime, DateTime, (RecurrenceRule? rule, string? error, bool ok)>
             ReadRaw { get; init; }
 
         public bool TryRead(
             DateTime startUtc, DateTime endUtc,
-            out RecurrenceSelection? selection, out string? error)
+            out RecurrenceRule? rule, out string? error)
         {
-            var (sel, err, ok) = ReadRaw(startUtc, endUtc);
-            selection = sel;
+            var (r, err, ok) = ReadRaw(startUtc, endUtc);
+            rule = r;
             error = err;
             return ok;
         }
@@ -795,7 +810,7 @@ public static class EventEditPopover
         }
     }
 
-    private static (RecurrenceSelection? selection, string? error, bool ok) ReadPicker(
+    private static (RecurrenceRule? rule, string? error, bool ok) ReadPicker(
         ComboBox freqCombo,
         ToggleButton[] dayChips,
         ComboBox endsCombo,
@@ -867,9 +882,11 @@ public static class EventEditPopover
                 break;
         }
 
-        var duration = endUtc - startUtc;
-        var cachedEnd = RecurrenceExpander.ComputeEndUtc(startUtc, duration, rule);
-        return (new RecurrenceSelection(rule, cachedEnd), null, true);
+        // EndUtcCached now depends on TimeZoneId — the picker doesn't know
+        // it (only buildEvent does). Return the rule; the caller computes
+        // the cached end via RecurrenceExpander.ComputeEndUtc with the
+        // appropriate tz inside buildEvent.
+        return (rule, null, true);
     }
 
     // ── Form building helpers ─────────────────────────────────────────────

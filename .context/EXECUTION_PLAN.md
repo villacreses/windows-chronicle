@@ -22,6 +22,7 @@ Build the complete provider-agnostic calendar experience before beginning accoun
 - Day View (single-day 24h timeline, built on the same selection model)
 - Recurrence Phase 1 (engine + skip-this-occurrence via EXDATE)
 - Recurrence Phase 2A (occurrence overrides + scope picker + `EventRef`)
+- Recurrence Phase 2B (wall-clock anchoring via `TimeZoneId`)
 
 ### UI CONSTRAINT (TEMPORARY)
 
@@ -36,27 +37,68 @@ No UI polish work should be introduced outside of Theme infrastructure stability
 
 ## Current Milestone
 
-Recurrence — Phase 2B (wall-clock anchoring / DST drift fix)
+Provider Integrations — Google Calendar (first adapter)
 
-See `DECISIONS.md` → "Recurrence: RRULE Canonical Form, Two-Phase
-Rollout" → "Phase 2B" for scope and rationale.
+Recurrence is complete (Phase 1 + 2A + 2B). The "Definition of Ready
+for Integrations" line below is satisfied; this milestone is the
+first concrete delivery against the "Provider-Neutral Architecture"
+decision in `DECISIONS.md` — Google supplies data, Chronicle's domain
+model (RRULE, EXDATE, EventOverride, TimeZoneId) absorbs it without
+shape change.
 
-Phase 2B sub-steps:
+Planning happens in a separate round before sub-step implementation
+begins. Open questions to settle first:
 
-1. Schema + model — `TimeZoneId TEXT NULL` column on `Events`,
-   forward-only migration step in `AppDatabase`, new recurring events
-   default `TimeZoneId` to the system's current IANA zone, existing
-   recurring rows stay NULL (legacy UTC anchoring).
-2. Expander — tz-aware branch inside `WalkAnchors` when `TimeZoneId`
-   is non-null: walk in local time, project each anchor to UTC at
-   emission. The NULL (legacy) path is unchanged. Pipeline shape and
-   all named invariants stay intact; the new branch is a strategy
-   variation, not a semantic shift.
+- OAuth + token storage (Windows DPAPI? Settings file? Per-account
+  key?).
+- Sync model (one-shot pull on connect vs. incremental sync token vs.
+  delta query). Idle Cost Budget says background polling is opt-in,
+  not ambient.
+- Adapter shape — where the Google → domain mapping lives, and how
+  the domain → Google write path handles round-trip identity (Google
+  `iCalUID` vs. our `Event.Id`).
+- Conflict resolution (Chronicle vs. Google last-write-wins, or
+  user-facing diff).
+- Display of provider-sourced calendars in the sidebar.
 
-After 2B ships, recurrence is considered complete for the purposes of
-"Definition of Ready for Integrations" — the documented deferrals
-(this-and-following scope, automatic orphan reconciliation, RRULE
-expressiveness) remain backlog items, not blockers.
+## Recently Completed: Recurrence Phase 2B
+
+Delivered:
+
+- `Event.TimeZoneId` (IANA string, nullable) — only meaningful with a
+  recurrence rule. `Validate()` refuses strings that don't resolve
+  via `TimeZoneInfo.FindSystemTimeZoneById`.
+- Schema: `TimeZoneId TEXT NULL` on `Events`, fresh-install via
+  `Schema.sql` plus guarded `ALTER TABLE` in
+  `AppDatabase.MigrateRecurrenceColumns`. Existing rows stay NULL =
+  legacy UTC walk (no auto-migration; DECISIONS.md "Anchor zone is
+  authoritative").
+- `EventEditPopover.GetDefaultRecurringTimeZoneId` — write-boundary
+  normalization (Windows ID → IANA via `TryConvertWindowsIdToIanaId`,
+  verify-as-IANA fallback, UTC + `Debug.WriteLine` for the rare
+  unrecognized-zone case). Guarantees the "always IANA" invariant at
+  the single point of origin.
+- Create path defaults `TimeZoneId` for new recurring events; edit
+  path preserves the master's existing `TimeZoneId` (newly-recurring
+  events get the default).
+- `WalkAnchorsForMaster` — single tz-aware dispatch shared by
+  `RecurrenceExpander.Expand` and `ComputeEndUtc` (DECISIONS.md
+  invariant #8). Bad-tz fallback degrades to legacy UTC walk for that
+  one series with a debug log (invariant #7).
+- `ResolveLocalForDst` — shift-forward at spring-forward gaps,
+  matching Google / Apple / libical convention.
+- `TzWalkPad` (1 hour, heuristic) — added to walk-termination and
+  UNTIL gates when tz-aware; anchors temporarily past unpadded UNTIL
+  are skipped without counting toward COUNT.
+- `RecurrenceSelection` wrapper removed from `EventEditPopover`;
+  picker returns `RecurrenceRule?` only, `buildEvent` computes
+  `EndUtcCached` inline with the resolved `TimeZoneId` so the cached
+  end is always computed under the same walk strategy the renderer
+  will use.
+- DECISIONS.md gains invariants #7 (bad-tz fallback) and #8 (single
+  walk dispatch), plus an "Anchor zone is authoritative" subsection
+  naming the no-auto-migration / preserve-on-edit position as a
+  deliberate product decision.
 
 ## Recently Completed: Recurrence Phase 2A
 

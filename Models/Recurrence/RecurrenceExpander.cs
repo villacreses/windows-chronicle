@@ -16,6 +16,25 @@ public static class RecurrenceExpander
 {
     private const int SafetyCap = 10_000;
 
+    // Padding added to walk-termination gates when a tz-aware walk is
+    // active. Shift-forward handling at DST gaps causes a one-time
+    // non-monotonic blip in the projected UTC anchor sequence (the gap-
+    // day anchor is shifted up by ~1 hour, then the next day's anchor
+    // returns to the normal UTC). Without padding, a termination gate
+    // landing in that blip would prematurely cut off subsequent valid
+    // anchors.
+    //
+    // HEURISTIC, not a protocol constant. One hour covers every modern
+    // IANA zone (Lord Howe's 30-minute delta is well within); we don't
+    // compute per-zone because over-padding has no correctness cost
+    // (just one extra anchor checked at the boundary) and the
+    // GetAdjustmentRules() lookup would add per-Expand overhead. If a
+    // real zone with a >1-hour DST shift ever needs to be supported,
+    // switch this to a per-zone computation — nothing in the algorithm
+    // depends on the value being exactly one hour. Zero when no tz is
+    // set so legacy UTC-anchored walks see no behavior change.
+    private static readonly TimeSpan TzWalkPad = TimeSpan.FromHours(1);
+
     public static IEnumerable<Event> Expand(
         Event master,
         DateTime rangeStartUtc,
@@ -61,14 +80,18 @@ public static class RecurrenceExpander
         // Walk-termination range: usually rangeEndUtc, but extended by
         // the largest backward displacement among the loaded overrides
         // so an override that pulls a future anchor into the visible
-        // window is reached by the walker. COUNT and UNTIL termination
-        // are unchanged — they're rule semantics, not range semantics.
-        var walkEndUtc = rangeEndUtc + maxPastDisplacement;
+        // window is reached by the walker, and (when tz-aware) by
+        // TzWalkPad to absorb the shift-forward UTC blip at DST gaps.
+        // COUNT and UNTIL termination are unchanged — they're rule
+        // semantics, not range semantics (UNTIL gets its own pad inside
+        // the loop below).
+        var dstPad = master.TimeZoneId is null ? TimeSpan.Zero : TzWalkPad;
+        var walkEndUtc = rangeEndUtc + maxPastDisplacement + dstPad;
 
         int generated = 0; // counts toward COUNT (pre-EXDATE, pre-override)
         int safety = 0;
 
-        foreach (var anchor in WalkAnchors(master.StartTimeUtc, rule))
+        foreach (var anchor in WalkAnchorsForMaster(master.StartTimeUtc, rule, master.TimeZoneId))
         {
             if (++safety > SafetyCap)
                 yield break;
@@ -76,10 +99,18 @@ public static class RecurrenceExpander
             if (rule.Count is int cap && generated >= cap)
                 yield break;
 
-            if (rule.UntilUtc is DateTime until && anchor > until)
+            // UNTIL termination: pad by dstPad before breaking so the
+            // shift-forward blip in a tz-aware walk doesn't cut off a
+            // subsequent valid anchor. Anchors temporarily past
+            // unpadded UNTIL still pass through the walker but are
+            // skipped by the per-iteration `continue` below.
+            if (rule.UntilUtc is DateTime until && anchor > until + dstPad)
                 yield break;
 
             generated++;
+
+            if (rule.UntilUtc is DateTime untilHard && anchor > untilHard)
+                continue;
 
             if (anchor > walkEndUtc)
                 yield break;
@@ -152,6 +183,96 @@ public static class RecurrenceExpander
             CreatedAtUtc = master.CreatedAtUtc,
             UpdatedAtUtc = ovr?.UpdatedAtUtc ?? master.UpdatedAtUtc,
         };
+    }
+
+    // Single dispatch shared by Expand and ComputeEndUtc — guarantees the
+    // two callers see the same anchor sequence under any walk strategy.
+    // The tz-aware branch walks in local time and projects each anchor to
+    // UTC at emission, with shift-forward handling for invalid local
+    // times. Bad TimeZoneId values degrade to the legacy UTC walk with a
+    // debug log (defense in depth — see DECISIONS.md "Named invariants").
+    private static IEnumerable<DateTime> WalkAnchorsForMaster(
+        DateTime startUtc,
+        RecurrenceRule rule,
+        string? timeZoneId)
+    {
+        if (timeZoneId is null)
+        {
+            foreach (var anchor in WalkAnchors(startUtc, rule))
+                yield return anchor;
+            yield break;
+        }
+
+        // C# disallows yield inside a catch clause, so the bad-tz
+        // fallback is split: catch sets `tz` to null and we yield the
+        // legacy UTC walk after the try.
+        TimeZoneInfo? tz;
+        try
+        {
+            tz = TimeZoneInfo.FindSystemTimeZoneById(timeZoneId);
+        }
+        catch (Exception ex) when (ex is TimeZoneNotFoundException
+                                || ex is InvalidTimeZoneException)
+        {
+            System.Diagnostics.Debug.WriteLine(
+                $"RecurrenceExpander: TimeZoneId '{timeZoneId}' did not "
+                + $"resolve ({ex.GetType().Name}); falling back to legacy "
+                + "UTC walk for this series.");
+            tz = null;
+        }
+
+        if (tz is null)
+        {
+            foreach (var anchor in WalkAnchors(startUtc, rule))
+                yield return anchor;
+            yield break;
+        }
+
+        // Convert the master's UTC start into the anchor zone's local
+        // time, then walk in local semantics. The walker primitives
+        // return Kind=Utc by implementation, but we treat their output
+        // as local-clock readings here — SpecifyKind(Unspecified) so
+        // ConvertTimeToUtc accepts them.
+        var startLocal = DateTime.SpecifyKind(
+            TimeZoneInfo.ConvertTimeFromUtc(startUtc, tz),
+            DateTimeKind.Unspecified);
+
+        foreach (var rawLocal in WalkAnchors(startLocal, rule))
+        {
+            var local = DateTime.SpecifyKind(rawLocal, DateTimeKind.Unspecified);
+            local = ResolveLocalForDst(local, tz);
+            yield return TimeZoneInfo.ConvertTimeToUtc(local, tz);
+        }
+    }
+
+    // Spring-forward gap (e.g. 2:30 AM doesn't exist on March 10, 2024
+    // in NY): shift forward by the DST adjustment delta so the event
+    // still occurs on its scheduled day, matching Google / Apple /
+    // libical convention. Ambiguous fall-back times are left alone —
+    // TimeZoneInfo.ConvertTimeToUtc defaults to standard time, which
+    // also matches convention. The defensive loop guards against
+    // pathological zones with sub-hour deltas (Lord Howe) or historical
+    // irregularities; bails after 4 iterations to avoid infinite loops.
+    private static DateTime ResolveLocalForDst(DateTime local, TimeZoneInfo tz)
+    {
+        for (int i = 0; i < 4 && tz.IsInvalidTime(local); i++)
+        {
+            var delta = FindAdjustmentRule(tz, local)?.DaylightDelta
+                ?? TimeSpan.FromHours(1);
+            local = local.Add(delta);
+        }
+        return local;
+    }
+
+    private static TimeZoneInfo.AdjustmentRule? FindAdjustmentRule(
+        TimeZoneInfo tz, DateTime local)
+    {
+        foreach (var rule in tz.GetAdjustmentRules())
+        {
+            if (rule.DateStart <= local && local <= rule.DateEnd)
+                return rule;
+        }
+        return null;
     }
 
     private static IEnumerable<DateTime> WalkAnchors(
@@ -274,25 +395,38 @@ public static class RecurrenceExpander
     // or null for infinite. Called by the writer when a rule is saved
     // so the range query can skip ended series cheaply. EXDATE does not
     // affect this — it only filters output, not series termination.
+    //
+    // Routes through WalkAnchorsForMaster so the cached end is computed
+    // under the same walk strategy the renderer will use — preventing
+    // drift between the two code paths under tz-aware anchoring.
     public static DateTime? ComputeEndUtc(
         DateTime startUtc,
         TimeSpan duration,
-        RecurrenceRule rule)
+        RecurrenceRule rule,
+        string? timeZoneId)
     {
         if (rule.UntilUtc is null && rule.Count is null)
             return null;
+
+        var dstPad = timeZoneId is null ? TimeSpan.Zero : TzWalkPad;
 
         DateTime lastAnchor = startUtc;
         int generated = 0;
         int safety = 0;
 
-        foreach (var anchor in WalkAnchors(startUtc, rule))
+        foreach (var anchor in WalkAnchorsForMaster(startUtc, rule, timeZoneId))
         {
             if (++safety > SafetyCap)
                 break;
 
-            if (rule.UntilUtc is DateTime until && anchor > until)
+            // UNTIL: pad by dstPad before breaking (shift-forward blip)
+            // and continue past anchors temporarily exceeding the
+            // unpadded UNTIL without counting them or updating
+            // lastAnchor — matches the Expand termination semantics.
+            if (rule.UntilUtc is DateTime until && anchor > until + dstPad)
                 break;
+            if (rule.UntilUtc is DateTime untilHard && anchor > untilHard)
+                continue;
 
             generated++;
             lastAnchor = anchor;
