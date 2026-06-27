@@ -50,7 +50,7 @@ internal sealed class WeekViewRenderer
     // Per-day-header visuals retained from the last Render() so selection-only
     // changes can update highlights in place. Selection within the visible
     // week must not reallocate columns, gridlines, chips, or scroll state —
-    // see the "Bounded Visuals Are Reused" guardrail in ARCHITECTURE.md.
+    // see "Bounded Visuals Are Reused" in .context/architecture/USER_INTERFACE.md.
     private readonly Dictionary<DateTime, Border> _dayNumberCircles = new();
     private readonly Dictionary<DateTime, TextBlock> _dayNumberBlocks = new();
 
