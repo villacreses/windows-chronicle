@@ -2,10 +2,10 @@
 
 Read files in this order:
 
-1. PROJECT.md
-2. architecture/CORE_ENGINE.md
-3. DECISIONS.md
-4. EXECUTION_PLAN.md
+1. `README.md` (repo root — product framing, principles, non-goals)
+2. `architecture/CORE_ENGINE.md`
+3. `DECISIONS.md`
+4. `EXECUTION_PLAN.md`
 
 Read the subsystem docs (`architecture/DATA_MODEL.md`,
 `architecture/USER_INTERFACE.md`, `architecture/RECURRENCE.md`) when
