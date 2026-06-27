@@ -24,6 +24,7 @@ namespace Chronicle
     {
         private readonly EventRepository _eventRepository = new();
         private readonly CalendarRepository _calendarRepository = new();
+        private readonly OverrideRepository _overrideRepository = new();
 
         private readonly SidebarRenderer _sidebarRenderer;
         private readonly CalendarGridRenderer _calendarGridRenderer;
@@ -672,42 +673,149 @@ namespace Chronicle
         }
 
         /// <summary>
-        /// Opens the edit-event popover for <paramref name="evt"/> near
-        /// <paramref name="naturalAnchor"/> (typically the event chip the user is
-        /// editing — captured in <see cref="OnEventClicked"/> and threaded
-        /// through <see cref="EventPopover_EditRequested"/>). The anchor and
-        /// placement are resolved via <see cref="ResolvePopoverAnchor"/> so Day
-        /// View centers instead of edge-aligning. On save, updates the event and
-        /// refreshes the active view. No-op if dismissed.
+        /// Dispatch entry for editing a chip. Constructs the
+        /// <see cref="EventRef"/> from the chip's <see cref="Event"/>, then
+        /// routes:
+        /// <list type="bullet">
+        /// <item>Standalone / master → master-edit popover (existing flow).</item>
+        /// <item>Occurrence → scope picker dialog, then either the master-edit
+        /// flow (All-events) or the occurrence-edit flow that writes an
+        /// override row (This-event).</item>
+        /// </list>
+        /// The anchor and placement are resolved via
+        /// <see cref="ResolvePopoverAnchor"/> so Day View centers instead of
+        /// edge-aligning. No-op if any prompt is dismissed.
         /// </summary>
         private async Task EditEventAsync(Event evt, FrameworkElement naturalAnchor)
         {
-            // The editor only sees masters (and standalones). If the user
-            // clicked an occurrence chip, fetch its master row from the DB
-            // and pass that — Phase 1 scope is "edit entire series", and the
-            // popover's banner makes that explicit. Phase 2 will introduce
-            // the scope picker that branches into EventOverride writes.
-            var target = evt.IsOccurrence
-                ? await _eventRepository.GetByIdAsync(evt.Id)
-                : evt;
+            var (anchor, placement) = ResolvePopoverAnchor(naturalAnchor);
 
-            if (target is null)
+            switch (EventRef.From(evt))
             {
-                // Master vanished between expansion and the click (e.g.
-                // deleted in another flow). Nothing to edit; refresh so the
-                // stale projection drops.
+                case EventRef.Master:
+                    // Standalone or master row (the latter shouldn't reach
+                    // here in practice — masters don't enter _eventsByDate —
+                    // but the type allows it cleanly). We already have the
+                    // Event in hand; no fetch needed.
+                    await EditMasterAsync(evt, anchor, placement);
+                    return;
+
+                case EventRef.Occurrence occurrence:
+                    var scope = await PromptEditScopeAsync(evt.Title);
+                    switch (scope)
+                    {
+                        case EditScope.AllEvents:
+                            await EditMasterByIdAsync(occurrence.SeriesId, anchor, placement);
+                            return;
+
+                        case EditScope.ThisEvent:
+                            await EditOccurrenceAsync(occurrence, evt, anchor, placement);
+                            return;
+
+                        default: // Cancel / dismissed
+                            return;
+                    }
+            }
+        }
+
+        private enum EditScope { ThisEvent, AllEvents, Cancel }
+
+        /// <summary>
+        /// Scope picker for recurring-event edits. ContentDialog with
+        /// "This event" / "All events" / "Cancel". Mirrors the delete
+        /// scope dialog so the user sees a consistent affordance for
+        /// both occurrence-scoped operations.
+        /// </summary>
+        private async Task<EditScope> PromptEditScopeAsync(string eventTitle)
+        {
+            var dialog = new ContentDialog
+            {
+                Title = "Edit recurring event",
+                Content = $"\"{eventTitle}\" is part of a recurring series. "
+                        + "Edit just this occurrence, or the entire series?",
+                PrimaryButtonText = "This event",
+                SecondaryButtonText = "All events",
+                CloseButtonText = "Cancel",
+                DefaultButton = ContentDialogButton.Close,
+                XamlRoot = Content.XamlRoot
+            };
+
+            var result = await dialog.ShowAsync();
+            return result switch
+            {
+                ContentDialogResult.Primary => EditScope.ThisEvent,
+                ContentDialogResult.Secondary => EditScope.AllEvents,
+                _ => EditScope.Cancel,
+            };
+        }
+
+        /// <summary>
+        /// Master-edit branch when the caller already has the master Event
+        /// in hand (standalone case, or freshly fetched). Opens the
+        /// existing all-events editor and persists via the event repository.
+        /// </summary>
+        private async Task EditMasterAsync(
+            Event master,
+            FrameworkElement anchor,
+            FlyoutPlacementMode placement)
+        {
+            var edited = await EventEditPopover.ShowEditEventAsync(
+                anchor, master, _allCalendars, placement);
+            if (edited is null)
+                return;
+
+            await _eventRepository.UpdateAsync(edited);
+            InvalidateLoadedEvents();
+            await RefreshActiveViewAsync();
+        }
+
+        /// <summary>
+        /// Master-edit branch when the caller has only the series id
+        /// (occurrence → All-events scope). Fetches the master row, then
+        /// delegates to <see cref="EditMasterAsync"/>. Missing master
+        /// triggers a refresh so the stale projection drops.
+        /// </summary>
+        private async Task EditMasterByIdAsync(
+            Guid masterId,
+            FrameworkElement anchor,
+            FlyoutPlacementMode placement)
+        {
+            var master = await _eventRepository.GetByIdAsync(masterId);
+            if (master is null)
+            {
                 InvalidateLoadedEvents();
                 await RefreshActiveViewAsync();
                 return;
             }
 
-            var (anchor, placement) = ResolvePopoverAnchor(naturalAnchor);
-            var edited = await EventEditPopover.ShowEditEventAsync(
-                anchor, target, _allCalendars, placement);
+            await EditMasterAsync(master, anchor, placement);
+        }
+
+        /// <summary>
+        /// Occurrence-edit branch (This-event scope). Opens the stripped
+        /// occurrence-edit popover pre-filled from the merged occurrence
+        /// values, converts the result into <see cref="OverrideFields"/>,
+        /// and writes via <see cref="OverrideRepository.UpsertAsync"/>.
+        /// Description and IsAllDay aren't on the popover's form, so they
+        /// stay null on the override (= inherit from master).
+        /// </summary>
+        private async Task EditOccurrenceAsync(
+            EventRef.Occurrence target,
+            Event occurrence,
+            FrameworkElement anchor,
+            FlyoutPlacementMode placement)
+        {
+            var edited = await EventEditPopover.ShowEditOccurrenceAsync(
+                anchor, occurrence, placement);
             if (edited is null)
                 return;
 
-            await _eventRepository.UpdateAsync(edited);
+            var fields = new OverrideFields(
+                Title: edited.Title,
+                StartTimeUtc: edited.StartTimeUtc,
+                EndTimeUtc: edited.EndTimeUtc);
+
+            await _overrideRepository.UpsertAsync(target, fields);
             InvalidateLoadedEvents();
             await RefreshActiveViewAsync();
         }
@@ -753,25 +861,76 @@ namespace Chronicle
             if (rangeStart >= _loadedRangeStartUtc && rangeEnd <= _loadedRangeEndUtc)
                 return;
 
+            // Two queries per range change, regardless of master count.
+            // Visibility toggles and view switches inside the loaded range
+            // hit neither (the cache short-circuit above covers them).
             var rows = await _eventRepository.GetInRangeAsync(rangeStart, rangeEnd);
-            _projectedEvents = ExpandRecurrences(rows, rangeStart, rangeEnd);
+
+            var recurringMasterIds = new List<Guid>();
+            foreach (var row in rows)
+            {
+                if (row.RecurrenceRule is not null)
+                    recurringMasterIds.Add(row.Id);
+            }
+
+            var overrides = recurringMasterIds.Count == 0
+                ? new List<EventOverride>()
+                : await _overrideRepository.GetForSeriesAsync(recurringMasterIds);
+
+            var overridesBySeries = GroupOverridesBySeries(overrides);
+
+            _projectedEvents = ExpandRecurrences(
+                rows, rangeStart, rangeEnd, overridesBySeries);
             _loadedRangeStartUtc = rangeStart;
             _loadedRangeEndUtc = rangeEnd;
+        }
+
+        /// <summary>
+        /// Buckets a flat override list by <c>SeriesEventId</c> so the
+        /// expander can do an O(1) lookup per series. Allocates one list
+        /// per series with overrides; series without overrides are
+        /// absent from the dictionary (the expander treats absence as
+        /// "no overrides").
+        /// </summary>
+        private static Dictionary<Guid, IReadOnlyList<EventOverride>> GroupOverridesBySeries(
+            List<EventOverride> overrides)
+        {
+            if (overrides.Count == 0)
+                return new Dictionary<Guid, IReadOnlyList<EventOverride>>();
+
+            var result = new Dictionary<Guid, List<EventOverride>>();
+            foreach (var ovr in overrides)
+            {
+                if (!result.TryGetValue(ovr.SeriesEventId, out var bucket))
+                {
+                    bucket = new List<EventOverride>();
+                    result[ovr.SeriesEventId] = bucket;
+                }
+                bucket.Add(ovr);
+            }
+
+            var typed = new Dictionary<Guid, IReadOnlyList<EventOverride>>(result.Count);
+            foreach (var (k, v) in result)
+                typed[k] = v;
+            return typed;
         }
 
         /// <summary>
         /// Flattens repository rows into the projection that
         /// <see cref="_eventsByDate"/> ultimately groups: standalone rows pass
         /// through; recurring master rows are replaced by their expansions
-        /// over the load range. Masters never enter the result — only their
-        /// expansions do. Expansion is bounded by the active view's range
-        /// (≤ 42 days), so the per-call cost is small even for long-lived
-        /// series; it runs once per range change, not on visibility toggles.
+        /// over the load range, with any per-occurrence overrides for the
+        /// series merged in by the expander. Masters never enter the result
+        /// — only their expansions do. Expansion is bounded by the active
+        /// view's range (≤ 42 days), so the per-call cost is small even for
+        /// long-lived series; it runs once per range change, not on
+        /// visibility toggles.
         /// </summary>
         private static List<Event> ExpandRecurrences(
             List<Event> rows,
             DateTime rangeStartUtc,
-            DateTime rangeEndUtc)
+            DateTime rangeEndUtc,
+            IReadOnlyDictionary<Guid, IReadOnlyList<EventOverride>> overridesBySeries)
         {
             var result = new List<Event>(rows.Count);
 
@@ -783,8 +942,9 @@ namespace Chronicle
                     continue;
                 }
 
+                var seriesOverrides = overridesBySeries.GetValueOrDefault(row.Id);
                 foreach (var occurrence in
-                    RecurrenceExpander.Expand(row, rangeStartUtc, rangeEndUtc))
+                    RecurrenceExpander.Expand(row, rangeStartUtc, rangeEndUtc, seriesOverrides))
                 {
                     result.Add(occurrence);
                 }

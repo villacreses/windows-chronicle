@@ -122,10 +122,40 @@ Day view:
 Event editing:
 
 - Tapping an event chip (any view) or a selected-day panel row opens
-  `OnEventClicked` (read-only). Its Edit button forwards to `EventEditPopover`
-  via the host, which on save updates the event and refreshes the active view.
+  `OnEventClicked` (read-only). Its Edit button forwards to the host's
+  `EditEventAsync`, which patterns on `EventRef.From(evt)`:
+  - **Master / standalone** → opens `EventEditPopover.ShowEditEventAsync`
+    directly. On save, `EventRepository.UpdateAsync` and refresh.
+  - **Occurrence** → shows the edit scope ContentDialog
+    (`PromptEditScopeAsync`: This event / All events / Cancel).
+    - **All events** → fetches the master via
+      `EventRepository.GetByIdAsync`, opens `ShowEditEventAsync` against
+      it, persists via `UpdateAsync`.
+    - **This event** → opens
+      `EventEditPopover.ShowEditOccurrenceAsync` (stripped form, no
+      Calendar / Repeats picker / banner; pre-filled from the merged
+      occurrence values). On save, the host converts the returned
+      `Event` into `OverrideFields` and writes via
+      `OverrideRepository.UpsertAsync(EventRef.Occurrence, ...)`.
+    - **Cancel** / dismiss → no state change.
 - All event create/edit flows go through `EventEditPopover` (light-dismiss
   flyout). Calendars still use modal dialogs via `CalendarDialogService`.
+
+Event deletion:
+
+- The `EventPopover`'s Delete button branches on `evt.IsOccurrence`:
+  - **Non-recurring** → existing two-step confirm ("Click again to
+    permanently delete"), then fires `DeleteRequested`.
+  - **Occurrence** → skips the two-step (the scope dialog is the
+    confirmation) and fires `DeleteRequested` immediately.
+- The host's `EventPopover_DeleteRequested` then branches:
+  - **Non-recurring** → `EventRepository.DeleteAsync(evt.Id)`.
+  - **Occurrence** → `DeleteOccurrenceAsync` shows a scope
+    ContentDialog (Skip this occurrence / Delete entire series /
+    Cancel). Skip appends `SeriesAnchorUtc` to the master's EXDATE
+    list verbatim and writes the master back; Delete-series uses the
+    same `DeleteAsync(occurrence.Id)` path (works because
+    `occurrence.Id == master.Id` by the identity contract).
 
 Calendar/sidebar changes:
 

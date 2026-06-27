@@ -12,9 +12,30 @@ Provider-specific concepts should never leak into UI code.
 
 Core entities:
 
-- Calendar
-- Event
-- Recurrence
+- `Calendar` — a top-level grouping.
+- `Event` — the unit of scheduling. A standalone event is a single
+  row; a recurring event is a *master* row plus a rule.
+- `EventOverride` — a per-occurrence divergence (one occurrence with
+  edited fields, keyed by `(SeriesEventId, OccurrenceAnchorUtc)`).
+  EXDATE handles cancellation; overrides handle modification.
+
+Value objects and identity primitives (under `Models/Recurrence/`):
+
+- `RecurrenceRule` — parsed RFC 5545 RRULE (FREQ / INTERVAL / BYDAY /
+  BYMONTHDAY / COUNT / UNTIL in MVP).
+- `EventKey (SeriesId, Anchor?)` — read-side identity. Keys any code
+  that holds `Event` instances across the mixed standalone+occurrence
+  collection (renderers, projection cache, chip-lookup).
+- `EventRef = Master(Id) | Occurrence(SeriesId, AnchorUtc)` —
+  mutation-boundary identity. Lives at edit/delete/upsert entry
+  points only; renderers stay on plain `Event`. See DECISIONS.md
+  "Tolerated ambiguity: Event carries dual semantics in UI read
+  paths" for why the wrapper is narrow rather than pervasive.
+
+Recurrence semantics (RRULE storage, expansion, projection, EXDATE,
+overrides, wall-clock anchoring) are documented in DECISIONS.md
+"Recurrence: RRULE Canonical Form, Two-Phase Rollout" and the
+"Named invariants" list there.
 
 Future providers map into these entities.
 
@@ -56,6 +77,23 @@ theoretically clean but practically over-strict: the conversion cost
 isn't on any hot path, and forcing a pre-converted projection would
 add per-event allocations or a parallel array for no measurable win,
 working against the small-footprint goal.
+
+### Wall-clock anchoring for recurring events (Phase 2B)
+
+Recurring events optionally carry an IANA `TimeZoneId` (e.g.
+`"America/New_York"`) as the anchor frame for the rule walk.
+`RecurrenceExpander.WalkAnchorsForMaster` is the single dispatch:
+when `TimeZoneId` is set, the walk happens in local time and each
+anchor is projected to UTC at emission. Legacy `TimeZoneId IS NULL`
+masters walk UTC directly (no auto-migration; see DECISIONS.md
+"Anchor zone is authoritative").
+
+The "TimeZoneInfo lookups banned in per-event loops" rule still
+applies. The expander caches one `TimeZoneInfo` per `Expand` call —
+not per anchor — which is the documented exception that the rule's
+spirit allows. EXDATE writes and override identity remain keyed on
+the UTC anchors the walker emits in either mode; the read-side
+contract is mode-agnostic.
 
 ## Provider Strategy
 
@@ -119,12 +157,39 @@ under `Views/`:
   button forwards to `EventEditPopover` via the host
 - `Views/Popovers/EventEditPopover` — light-dismiss create/edit event editor: a
   static helper that shows a programmatic form (name, calendar, start/end
-  date+time) in a `Flyout` anchored to a window point, returning the resulting
-  `Event` on save or `null` on cancel/dismiss. The sole event-editing UI — it
-  builds and returns the `Event` only; MainWindow persists via
-  `EventRepository`. Used by Month (double-tap a day), Week and Day (tap an
-  empty time slot), the selected-day panel, and the read-only event popover's
-  Edit button.
+  date+time, Repeats picker, Ends picker) in a `Flyout` anchored to a window
+  point. Two entry points:
+  - `ShowCreateEventAsync` / `ShowEditEventAsync` (master-edit form, includes
+    the Repeats picker; defaults `TimeZoneId` on the create path).
+  - `ShowEditOccurrenceAsync` (stripped form for the This-event scope: no
+    Calendar, no Repeats picker, no recurring banner).
+  Returns the resulting `Event` on save or `null` on cancel/dismiss. The sole
+  event-editing UI — it builds and returns the `Event` only; MainWindow
+  persists via `EventRepository` (master path) or `OverrideRepository` (the
+  occurrence-edit branch — see "scope picker" below).
+
+Recurring-event mutation dispatch (a MainWindow coordinator
+responsibility, not a renderer one):
+
+- **Edit.** `MainWindow.EditEventAsync` patterns on `EventRef.From(evt)`.
+  Master / standalone → existing master-edit popover. Occurrence →
+  `PromptEditScopeAsync` ContentDialog (This event / All events /
+  Cancel) → either `EditMasterByIdAsync` (fetch master, route to the
+  same master-edit popover) or `EditOccurrenceAsync` (occurrence-edit
+  popover, save via `OverrideRepository.UpsertAsync`).
+- **Delete.** `EventPopover` skips its two-step confirm for occurrences
+  and forwards directly to `EventPopover_DeleteRequested`, which
+  branches on `IsOccurrence`. Recurring → `DeleteOccurrenceAsync`
+  shows a scope ContentDialog (Skip this occurrence / Delete entire
+  series / Cancel). Skip appends `SeriesAnchorUtc` to the master's
+  EXDATE list verbatim (precision invariant). Delete-series uses the
+  existing `EventRepository.DeleteAsync(occurrence.Id)` — works
+  because `occurrence.Id == master.Id` (identity contract).
+
+Both flows enforce the persistence boundary via
+`EventRepository.RefuseOccurrence` at the repository chokepoint.
+`OverrideRepository.UpsertAsync` takes `EventRef.Occurrence`
+specifically, so calling it with a master is a compile error.
 
 Renderers may retain UI bookkeeping needed for incremental updates —
 references to per-day visuals so a selection change can mutate two

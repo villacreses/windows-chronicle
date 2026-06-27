@@ -53,6 +53,21 @@ public sealed class Event
     // expansion or termination decisions. Maintained by the writer.
     public DateTime? RecurrenceEndUtcCached { get; set; }
 
+    // IANA timezone identifier for the recurrence anchor frame (Phase 2B).
+    // Non-null only meaningful when RecurrenceRule is set; null for
+    // non-recurring events and for legacy UTC-anchored recurring rows.
+    // When non-null, the expander walks in this timezone's local time and
+    // projects each anchor to UTC at emission, fixing DST drift for
+    // wall-clock-anchored series.
+    //
+    // Invariant: persisted values are always IANA (e.g.
+    // "America/New_York"), never Windows zone IDs. The editor's default-
+    // population helper normalizes at the write boundary; Validate()
+    // refuses strings that don't resolve via TimeZoneInfo. The expander
+    // additionally degrades to the legacy UTC walk if a stored id ever
+    // fails to resolve (defense in depth — see DECISIONS.md).
+    public string? TimeZoneId { get; set; }
+
     // Transient (NEVER persisted). Set only on expanded occurrences as
     // the canonical UTC anchor of this occurrence within its series;
     // null for standalone events and master rows. Combined with `Id`
@@ -89,6 +104,22 @@ public sealed class Event
         foreach (var ex in RecurrenceExDatesUtc)
         {
             ValidateUtcKind(ex, nameof(RecurrenceExDatesUtc));
+        }
+
+        if (TimeZoneId is string tzId)
+        {
+            try
+            {
+                TimeZoneInfo.FindSystemTimeZoneById(tzId);
+            }
+            catch (Exception ex) when (ex is TimeZoneNotFoundException
+                                    || ex is InvalidTimeZoneException)
+            {
+                throw new InvalidOperationException(
+                    $"TimeZoneId '{tzId}' does not resolve to a known "
+                    + "timezone. Expected an IANA identifier "
+                    + "(e.g. 'America/New_York').", ex);
+            }
         }
     }
 
