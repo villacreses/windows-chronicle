@@ -17,15 +17,15 @@ The project exists because Windows lacks a compelling vendor-neutral desktop cal
 
 ## Current Strategy
 
-Build provider-agnostic functionality first.
+The local calendar experience is mature (month / week / day views,
+calendar management, recurrence with overrides and wall-clock
+anchoring). The next milestone is provider integrations, starting
+with Google Calendar.
 
-Do not prioritize:
+Still not prioritized:
 
-- Google integration
-- Outlook integration
-- AI features
-
-until the local calendar experience is mature.
+- AI features (kept off the roadmap until provider integrations
+  ship and a design overhaul lands).
 
 ## Expectations
 
@@ -44,14 +44,15 @@ Avoid:
 
 ## Current Focus
 
-Mini Month Navigator
+Provider Integrations — Google Calendar (first adapter). Planning
+round before sub-step implementation; open questions (OAuth + token
+storage, sync model, adapter shape, conflict resolution, sidebar
+display) are listed in `EXECUTION_PLAN.md`.
 
 Followed by:
 
-- Calendar CRUD UI
-- Week View
-- Day View
-- Recurrence UI
+- Outlook Calendar
+- Design overhaul (replaces the dev-only dark-theme override)
 
 ## Important Principle
 
