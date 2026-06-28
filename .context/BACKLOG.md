@@ -21,9 +21,10 @@
 
 ## Visualization
 
-- Agenda view
 - Timeline view
-- Year view
+
+(Agenda view and Year view were promoted to the Local Baseline
+milestone in `EXECUTION_PLAN.md`.)
 
 ## Experimental
 

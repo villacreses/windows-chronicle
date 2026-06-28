@@ -2,7 +2,10 @@
 
 ## Current Objective
 
-Build the complete provider-agnostic calendar experience before beginning account integrations.
+Make Chronicle's local calendar experience complete, trustworthy, and
+fully capable before any provider integration work begins. Sync
+multiplies complexity; the local foundation must be solid before
+anything is built on top of it.
 
 ## Completed
 
@@ -29,37 +32,89 @@ Build the complete provider-agnostic calendar experience before beginning accoun
 A dev-only dark theme override is active to reduce visual fatigue.
 
 This does NOT change execution priority:
-1. Recurrence
+1. Local baseline completion
 2. Provider integrations
 3. Design overhaul
 
-No UI polish work should be introduced outside of Theme infrastructure stability.
+No UI polish work should be introduced outside of Theme infrastructure
+stability.
 
-## Current Milestone
+## Current Milestone: Local Baseline Completion
 
-Provider Integrations — Google Calendar (first adapter)
+Six features that finish the local experience before provider
+integration begins. Each is something a user expects an offline
+calendar to do — not a nice-to-have.
 
-Recurrence is complete (Phase 1 + 2A + 2B). The "Definition of Ready
-for Integrations" line below is satisfied; this milestone is the
-first concrete delivery against the "Provider-Neutral Architecture"
-decision in `DECISIONS.md` — Google supplies data, Chronicle's domain
-model (RRULE, EXDATE, EventOverride, TimeZoneId) absorbs it without
-shape change.
+**The six features:**
 
-Planning happens in a separate round before sub-step implementation
-begins. Open questions to settle first:
+1. **All-day event polish** — create / edit + correct rendering across
+   Month, Week, and Day views.
+2. **Notes / description field** — present in the editor, popover, and
+   selected-day panel.
+3. **Search** — find events by title, description, calendar, and
+   recurrence instances.
+4. **Agenda view** — chronological upcoming-events list.
+5. **Year view** — at-a-glance year overview.
+6. **Notifications / reminders** — scheduled, reliable,
+   persistence-aware.
 
-- OAuth + token storage (Windows DPAPI? Settings file? Per-account
-  key?).
-- Sync model (one-shot pull on connect vs. incremental sync token vs.
-  delta query). Idle Cost Budget says background polling is opt-in,
-  not ambient.
-- Adapter shape — where the Google → domain mapping lives, and how
-  the domain → Google write path handles round-trip identity (Google
-  `iCalUID` vs. our `Event.Id`).
-- Conflict resolution (Chronicle vs. Google last-write-wins, or
-  user-facing diff).
-- Display of provider-sourced calendars in the sidebar.
+### Recommended sequencing
+
+Three phases, ordered foundation-first and trust-last:
+
+**Phase A — Event content completeness:**
+
+- All-day event polish
+- Notes / description field
+
+Both touch the editor form, the popover, and the renderers; doing
+them together means one editor revision, not two. Data-model support
+likely already exists (Events table carries `IsAllDay` and
+`Description`); the question per item is how much UI / rendering work
+remains. Phase A begins with an audit of the current state.
+
+**Phase B — Discovery:**
+
+- Search (data layer + UI surface)
+- Agenda view (new renderer, reuses event pipeline)
+- Year view (new renderer)
+
+Search first — most user-visible value, and its storage / index
+decisions inform the agenda and year queries. Both new views reuse
+`_eventsByDate` and `DateHelpers`; per "View Switching Does Not
+Query" they should issue zero SQLite queries when the loaded range
+hasn't changed.
+
+**Phase C — Reliability:**
+
+- Notifications / reminders
+
+Notifications go last. The subsystem is the largest single piece —
+Windows toast scheduling, reminder persistence, snooze / dismiss
+state, a new schema, and a NOTIFICATIONS.md doc that will be created
+when this phase begins. An unreliable reminder erodes trust more
+than a missing one; shipping reminders on top of a polished calendar
+means fewer moving parts to debug if a reminder misfires. The Idle
+Cost Budget forbids polling, so registration with the platform's
+notification scheduler is the only acceptable shape — not an in-app
+timer.
+
+### Open questions to settle as each phase begins
+
+- **Phase A** — audit the current all-day path: does the model carry
+  `IsAllDay`? Does the editor expose the toggle? Where do renderers
+  surface it (month chip variant, week all-day band, day all-day
+  band)? Notes similarly: schema column likely exists; is the gap
+  UI-only?
+- **Phase B** — search storage and query shape (SQLite `LIKE` vs FTS5;
+  bulk-write rules apply if FTS5 needs a rebuild). Agenda view's range
+  (next-N-events vs next-N-days). Year view interaction model
+  (tap-to-drill semantics; how event density gets rendered).
+- **Phase C** — Windows toast scheduling (registered with the system,
+  not in-app polling). Reminder persistence (column on `Events` vs
+  separate table — interacts with `EventOverride` for per-occurrence
+  reminder edits). Snooze / dismiss state and how it survives app
+  restarts.
 
 ## Recently Completed: Recurrence Phase 2B
 
@@ -203,12 +258,26 @@ Delivered:
 
 ## Next Milestones
 
-After Phase 2B:
+Deferred until the Local Baseline milestone is complete.
 
 ### Provider Integration Phase
 
-- Google Calendar
+- Google Calendar (first adapter)
 - Outlook Calendar
+
+Open questions, parked until Phase C completes:
+
+- OAuth + token storage (Windows DPAPI? Settings file? Per-account
+  key?).
+- Sync model (one-shot pull on connect vs. incremental sync token vs.
+  delta query). The Idle Cost Budget says background polling is
+  opt-in, not ambient.
+- Adapter shape — where the Google → domain mapping lives, and how
+  the domain → Google write path handles round-trip identity (Google
+  `iCalUID` vs. our `Event.Id`).
+- Conflict resolution (Chronicle vs. Google last-write-wins, or
+  user-facing diff).
+- Display of provider-sourced calendars in the sidebar.
 
 ### Design Overhaul
 
@@ -218,8 +287,14 @@ Replaces the dev-only dark-theme override (see DECISIONS.md).
 
 Before Google integration begins:
 
-- Month view complete
-- Week view complete
-- Day view complete
-- Calendar management complete
-- Recurrence complete (Phase 1 + Phase 2A + Phase 2B)
+- Month view ✓
+- Week view ✓
+- Day view ✓
+- Calendar management ✓
+- Recurrence (Phase 1 + 2A + 2B) ✓
+- All-day event polish (Phase A)
+- Notes / description field (Phase A)
+- Search (Phase B)
+- Agenda view (Phase B)
+- Year view (Phase B)
+- Notifications / reminders (Phase C)
