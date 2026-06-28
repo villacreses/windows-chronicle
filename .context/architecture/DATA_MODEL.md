@@ -83,7 +83,10 @@ are upgraded by guarded `ALTER TABLE` statements (e.g.
 
 Core tables:
 
-- `Calendars` — id, name, color, visibility.
+- `Calendars` — id, name, color. (Visibility is *not* a stored column;
+  it is a runtime UI filter held in `MainWindow._calendarVisibility`,
+  defaulted to visible on load. See `architecture/USER_INTERFACE.md`
+  "Mutation Flows" for the rationale and zero-query contract.)
 - `Events` — id, calendar id, title, description, `StartTimeUtc`,
   `EndTimeUtc`, all-day flag, optional `RecurrenceRule` (RFC 5545
   RRULE string), optional `RecurrenceEndUtcCached`, optional

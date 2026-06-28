@@ -55,10 +55,11 @@ The project exists because Windows lacks a compelling vendor-neutral desktop cal
 
 ## Current Strategy
 
-The local calendar experience is mature (month / week / day views,
+The local calendar foundation is in place (month / week / day views,
 calendar management, recurrence with overrides and wall-clock
-anchoring). The next milestone is provider integrations, starting
-with Google Calendar.
+anchoring). The next milestone is **Local Baseline Completion** — six
+features that finish the local experience before any provider
+integration work begins (see `EXECUTION_PLAN.md`).
 
 Still not prioritized:
 
@@ -82,14 +83,22 @@ Avoid:
 
 ## Current Focus
 
-Provider Integrations — Google Calendar (first adapter). Planning
-round before sub-step implementation; open questions (OAuth + token
-storage, sync model, adapter shape, conflict resolution, sidebar
-display) are listed in `EXECUTION_PLAN.md`.
+Local Baseline Completion — six features that finish the local
+calendar experience before provider integration begins:
+
+1. All-day event polish (Phase A)
+2. Notes / description field (Phase A)
+3. Search (Phase B)
+4. Agenda view (Phase B)
+5. Year view (Phase B)
+6. Notifications / reminders (Phase C)
+
+See `EXECUTION_PLAN.md` for sequencing rationale and per-phase open
+questions.
 
 Followed by:
 
-- Outlook Calendar
+- Provider integrations (Google Calendar first, then Outlook)
 - Design overhaul (replaces the dev-only dark-theme override)
 
 ## Important Principle

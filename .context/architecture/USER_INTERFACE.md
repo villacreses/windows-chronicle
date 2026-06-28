@@ -227,10 +227,22 @@ redesigned.
 Both flows enforce the persistence boundary via
 `EventRepository.RefuseOccurrence` at the repository chokepoint.
 
-Calendar visibility changes, calendar create / edit / delete, event
-delete, and event dialog completion all reload the active view's data
-without changing navigation state (`RefreshActiveViewAsync` for the
-existing range, not a new range).
+Calendar create / edit / delete, event delete, and event dialog
+completion reload the active view's data without changing navigation
+state (`RefreshActiveViewAsync` for the existing range, not a new
+range).
+
+Calendar **visibility** toggles are different: visibility is a
+client-side filter held only in `MainWindow._calendarVisibility` (a
+runtime `Dictionary<Guid, bool>`, defaulted to visible on load, not
+persisted to SQLite). A toggle re-runs `ApplyVisibilityFilter()` over
+the already-loaded projection and re-renders the active view. **No
+SQLite query is issued.** This is what the engine's Idle Cost Budget
+calls for on a checkbox click, and what the test suite encodes as a
+behavioral contract — see `TESTING.md` "Protect Performance
+Contracts." Persisted visibility is not currently a product position;
+if it becomes one, the persistence shape and the zero-query rule have
+to be reconciled deliberately.
 
 ## Visual Design
 

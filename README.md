@@ -64,8 +64,9 @@ The design draws inspiration from Samsung Calendar and Apple Calendar while rema
 - Create events
 - Edit events
 - Delete events
-- All-day events
+- All-day events (polish pending — see Roadmap)
 - Multi-calendar support
+- Recurring events (RRULE storage, EXDATE skips, per-occurrence overrides, wall-clock anchoring)
 
 ### Views
 
@@ -83,14 +84,20 @@ The design draws inspiration from Samsung Calendar and Apple Calendar while rema
 
 ## Roadmap
 
-### In Progress
+### In Progress: Local Baseline
 
-- Recurrence editing
-- Recurrence rendering
+Six features that finish the local experience before provider integration begins:
+
+- All-day event polish
+- Notes / description field
+- Search
+- Agenda view
+- Year view
+- Notifications / reminders
 
 ### Planned Integrations
 
-Once the local calendar experience is complete:
+Once the Local Baseline ships:
 
 - Google Calendar
 - Outlook Calendar
@@ -103,9 +110,7 @@ Once the local calendar experience is complete:
 
 ### Future Views
 
-- Agenda View
 - Timeline View
-- Year View
 
 ## Architecture
 
@@ -155,4 +160,4 @@ Provide a modern, native calendar experience for Windows.
 
 Active development.
 
-Current focus: completing recurrence support before beginning provider integrations.
+Current focus: completing the Local Baseline (all-day polish, notes, search, agenda view, year view, notifications) before beginning provider integrations.

@@ -1,18 +1,50 @@
 # Testing Strategy
 
-Chronicle should build a local-core test suite before beginning Google
-Calendar integration.
+Chronicle should build a local-core test suite before the next wave of local
+features lands and well before any provider integration.
 
-The local experience is now large enough that provider work would otherwise
-compound risk: recurrence, occurrence overrides, EXDATE skips, timezone
-anchoring, navigation ranges, SQLite persistence, and visibility filtering all
-define the behavior that providers must later preserve. If those contracts are
-not executable, Google integration will turn local bugs into sync bugs, which
-are harder to diagnose and more expensive to unwind.
+`EXECUTION_PLAN.md` now inserts a six-feature Local Baseline — all-day
+polish, notes / description, search, agenda view, year view, notifications —
+between the current state and Google Calendar work. All six sit downstream of
+the recurrence engine, the projection cache, and the repository contracts that
+are currently only manually verified. Without tests, an untested core compounds
+risk across those features before the first provider line of code is written;
+with tests, each baseline feature is built against contracts that fail loudly
+when broken.
+
+The provider-era case still holds: recurrence, occurrence overrides, EXDATE
+skips, timezone anchoring, navigation ranges, SQLite persistence, and
+visibility filtering all define behavior that providers must later preserve.
+If those contracts are not executable, Google integration will turn local bugs
+into sync bugs, which are harder to diagnose and more expensive to unwind. The
+test suite protects both stretches: the six features ahead, and the providers
+beyond them.
 
 The goal is not "coverage for coverage's sake." The goal is antifragility:
 tests that make the most important Chronicle invariants difficult to break by
 accident.
+
+## Where the Contracts Under Test Live
+
+The architecture docs are the source of truth for the invariants and contracts
+that this suite encodes. When writing a test, fact-check the behavior against:
+
+- `architecture/RECURRENCE.md` — the eight numbered invariants, expansion
+  pipeline, EXDATE / override semantics, DST handling, anchor-zone position.
+- `architecture/DATA_MODEL.md` — identity primitives (`EventKey`, `EventRef`),
+  UTC storage, repository contracts, cascade-delete semantics, bulk-write
+  rules.
+- `architecture/USER_INTERFACE.md` — view-switching zero-query rule,
+  `_eventsByDate` as the single event cache, selection vs. range paths.
+- `architecture/CORE_ENGINE.md` — Idle Cost Budget, no-parallel-local-time
+  rule, no-ambient-background-work rule.
+- `DECISIONS.md` — rationale for why each contract is what it is (alternatives
+  weighed, tradeoffs). Useful when a test seems to demand a behavior the
+  contract doesn't, or vice versa.
+
+A test that contradicts an invariant in these docs is either testing the wrong
+thing or has surfaced a real contract drift worth raising before the test
+lands.
 
 ## Principles
 
@@ -104,6 +136,38 @@ This habit matters more than any single test list in this document. A young
 suite becomes valuable fastest when real regressions leave executable fossils
 behind.
 
+### Grow the Suite with the Local Baseline
+
+The six Local Baseline features are not "add later" coverage — each lands with
+tests in the layers it touches, the same PR that ships the feature:
+
+- **All-day polish** — Layer 1 model coverage for whatever validation rules
+  Phase A defines (e.g. `IsAllDay`-vs-time-field constraints, if the audit
+  makes them explicit — `EXECUTION_PLAN.md` Phase A opens with an audit, so the
+  rules are not yet decided), Layer 4 (all-day events flow through the
+  projection cache and visibility filter correctly).
+- **Notes / description** — Layer 1 (model round-trip), Layer 3 (column
+  persistence), Layer 5 if any logic moves out of the editor.
+- **Search** — Layer 3 (query shape, predicates, recurring-master inclusion),
+  Layer 4 (result projection, recurring instances expanded under the same
+  pipeline as views).
+- **Agenda view** — Layer 4 (new range model, `_eventsByDate` reuse, zero-query
+  on already-loaded data per `architecture/USER_INTERFACE.md`).
+- **Year view** — Layer 4 (range coverage), Layer 5 if density rendering grows
+  testable logic.
+- **Notifications / reminders** — Layer 1 (reminder model validation), Layer 3
+  (persistence, cascade with `Event` deletion, override interaction), plus an
+  Idle Cost Budget assertion that the scheduler does not poll: no in-app timer
+  loop, no recurring DB wakeup. The exact test mechanism (SQLite query count,
+  timer-hook absence, platform-registration check) is decided in
+  `NOTIFICATIONS.md` when Phase C begins — the contract is "no polling," not
+  any specific instrumentation.
+
+Without this rule, the suite snapshots pre-baseline behavior and silently
+fails to grow with the calendar. The point is not exhaustive coverage of every
+new feature — it is that the feature does not ship without exercising the
+contracts it touches.
+
 ## Proposed Test Project
 
 Add a separate test project, likely `Chronicle.Tests`.
@@ -193,16 +257,24 @@ Do not extract the whole `MainWindow`. Do not introduce MVVM. This is a real
 refactor and should be treated as multi-step work, not a quick seam. The goal
 is a small testable helper around behavior that already exists.
 
-This extraction should happen before provider integration starts, not
-concurrently with Google work. If the helper is shaped at the same time as the
-Google adapter, it risks becoming accidentally Google-flavored instead of
-provider-neutral.
+This extraction should happen **before Phase B of the Local Baseline** (search,
+agenda view, year view) — not after. Phase B introduces three new consumers of
+the projection pipeline: search adds a new query shape with recurring-instance
+expansion; agenda adds a new range model that needs `_eventsByDate` coverage
+decisions; year view adds another renderer reading the projection cache. If
+those features are built before the helper is extracted, they will stamp their
+shape into `MainWindow` directly, and the helper that gets pulled out later
+will be co-designed around their needs rather than the provider-neutral domain
+model. The same logic applies further out: extracting before Google integration
+prevents the Google adapter from accidentally shaping the helper. Phase B is
+the closer threat.
 
 Why this prevents later difficulty:
 
-Provider integration will add more event sources, and the projection pipeline
-must remain provider-neutral. A small tested projection layer makes it much
-harder for Google-specific behavior to leak into UI code.
+Both Phase B features and provider integration will add more event sources, and
+the projection pipeline must remain provider-neutral. A small tested projection
+layer makes it much harder for any single consumer — local feature or external
+provider — to leak its shape into UI code.
 
 ### Timeline Packing Extraction
 
@@ -439,10 +511,12 @@ Work:
 - test cache coverage decisions
 - test Month/Week/Day range selection
 
-This should land before Google integration begins. It prevents local navigation
-and view switching from regressing while provider work is added, and it keeps
-the provider-neutral event pipeline from being designed around one provider's
-needs.
+This should land before Phase B of the Local Baseline (search / agenda / year
+view) begins, and well before Google integration. It prevents local navigation
+and view switching from regressing while new event-pipeline consumers — first
+Phase B features, then providers — are added, and it keeps the
+provider-neutral event pipeline from being designed around any single
+consumer's needs.
 
 ## What Not To Do Yet
 
