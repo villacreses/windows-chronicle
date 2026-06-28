@@ -1,0 +1,29 @@
+<Project>
+
+  <!--
+    Central Package Management: every NuGet version is declared here once,
+    and project files reference packages without a Version attribute. This
+    keeps the app, Chronicle.Core, and the test project from drifting onto
+    different versions of a shared package (e.g. Microsoft.Data.Sqlite,
+    used by both Core and — transitively — the app).
+  -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Production -->
+    <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.8" />
+    <PackageVersion Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.1839" />
+    <PackageVersion Include="Microsoft.WindowsAppSDK" Version="2.1.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Test-only -->
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageVersion Include="xunit" Version="2.9.3" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.4" />
+    <PackageVersion Include="coverlet.collector" Version="6.0.4" />
+  </ItemGroup>
+
+</Project>

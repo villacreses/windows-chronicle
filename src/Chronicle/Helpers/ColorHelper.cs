@@ -9,7 +9,9 @@ namespace Chronicle.Helpers;
 /// </summary>
 internal static class ColorHelper
 {
-    public const string AppAccentHex = "#2E9B7C";
+    // Single source of truth lives in the domain (Calendar.DefaultColorHex);
+    // re-exposed here for UI call sites that default a calendar's color.
+    public const string AppAccentHex = Calendar.DefaultColorHex;
 
     public static Windows.UI.Color AppAccent => Theme.Accent;
 

@@ -26,6 +26,9 @@ anything is built on top of it.
 - Recurrence Phase 1 (engine + skip-this-occurrence via EXDATE)
 - Recurrence Phase 2A (occurrence overrides + scope picker + `EventRef`)
 - Recurrence Phase 2B (wall-clock anchoring via `TimeZoneId`)
+- Test infrastructure: `Chronicle.Core` extraction + `src/`-`tests/`
+  layout + xUnit project (see `TESTING.md` / DECISIONS.md "Domain
+  Extracted to Chronicle.Core"). Layer 1+ tests still to be written.
 
 ### UI CONSTRAINT (TEMPORARY)
 

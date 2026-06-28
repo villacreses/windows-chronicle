@@ -13,6 +13,23 @@ your work touches that subsystem.
 
 Then inspect the repository.
 
+## Code Layout
+
+Conventional `src/` + `tests/` layout:
+
+- `src/Chronicle.Core/` — pure domain library (`Models/`, `Data/`,
+  `Helpers/DateHelpers`). Plain `net8.0`, no WinUI.
+- `src/Chronicle/` — the WinUI 3 app (`Views/`, renderers, popovers,
+  UI helpers). References `Chronicle.Core`.
+- `tests/Chronicle.Tests/` — xUnit, references `Chronicle.Core`.
+
+Solution: `Chronicle.slnx` at the repo root. Build/test with
+`dotnet build Chronicle.slnx -p:Platform=x64` and
+`dotnet test Chronicle.slnx`. Repo-level config: `global.json`
+(SDK pin), `Directory.Build.props` (shared MSBuild props),
+`Directory.Packages.props` (central NuGet versions). See `DECISIONS.md`
+"Domain Extracted to Chronicle.Core" and `.context/TESTING.md`.
+
 ## Context Organization
 
 The `.context/` directory uses a spine + subsystem layout. Knowing

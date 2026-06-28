@@ -168,156 +168,148 @@ fails to grow with the calendar. The point is not exhaustive coverage of every
 new feature — it is that the feature does not ship without exercising the
 contracts it touches.
 
-## Test Project Shape
+## Repository Layout and Test Project Shape
 
-The test project is `tests/Chronicle.Tests/Chronicle.Tests.csproj`,
-added to `Chronicle.slnx` under a `/tests/` solution folder. Run with
-`dotnet test tests/Chronicle.Tests/Chronicle.Tests.csproj`.
+The repo uses the conventional .NET `src/` + `tests/` layout. Every
+project lives under its own directory, so no project's implicit
+compile glob overlaps another's:
 
-### Current shape (what landed)
+```
+Chronicle.slnx                          (solution, repo root)
+global.json                             (SDK pin)
+Directory.Build.props                   (shared MSBuild properties)
+Directory.Packages.props                (central NuGet versions)
+src/
+  Chronicle/        Chronicle.csproj    (WinUI app: Views, App.xaml, Helpers/ColorHelper+Theme)
+  Chronicle.Core/   Chronicle.Core.csproj (Models, Data, Helpers/DateHelpers — pure domain)
+tests/
+  Chronicle.Tests/  Chronicle.Tests.csproj (xUnit)
+```
+
+Run tests with `dotnet test tests/Chronicle.Tests/Chronicle.Tests.csproj`
+or `dotnet test Chronicle.slnx`.
+
+### `Chronicle.Core` is the domain library
+
+`Chronicle.Core` is a plain `net8.0` class library holding the pure,
+non-UI code: `Models/`, `Data/` (SQLite repositories + `AppDatabase`),
+and `Helpers/DateHelpers.cs`. It carries **no** WinUI / WindowsAppSDK
+surface. The WinUI app references it; the test project references it.
+This is the assembly the architecture docs always implied — "Chronicle
+owns the domain model … provider-specific concepts must never leak
+into the UI or persistence layers" — now expressed as a real assembly
+boundary.
+
+### The test project references Core conventionally
 
 - TFM: **`net8.0`** (plain, no Windows surface).
 - Framework: **xUnit** (`xunit`, `xunit.runner.visualstudio`,
   `Microsoft.NET.Test.Sdk`, `coverlet.collector`).
-- Properties: `IsPackable=false`, `IsTestProject=true`,
-  `Nullable=enable`.
-- Pure domain sources are compiled directly into the test assembly
-  via `<Compile Include>`: all of `Models/**/*.cs` (excluding
-  `Models/Calendar.cs` — see below) and `Helpers/DateHelpers.cs`.
-- `Chronicle.csproj` is **not** referenced via `<ProjectReference>`.
-  See "Why file-include" below.
+- Properties: `IsPackable=false`, `IsTestProject=true` (`Nullable`,
+  `ImplicitUsings` come from `Directory.Build.props`).
+- **`<ProjectReference Include="..\..\src\Chronicle.Core\Chronicle.Core.csproj" />`**
+  — the standard shape. No file-include, no workaround.
 
-In `Chronicle.csproj`, the only production-side change is
-`<DefaultItemExcludes>$(DefaultItemExcludes);tests\**</DefaultItemExcludes>` —
-prevents the SDK's implicit `*.cs` glob from pulling test sources
-into the production compile.
+Core exposes its internals to the app and the tests via
+`InternalsVisibleTo("Chronicle")` / `InternalsVisibleTo("Chronicle.Tests")`
+in `Chronicle.Core.csproj` — needed because `DateHelpers` (and its
+`MonthGrid` struct) are `internal` and consumed by both. Everything in
+`Models/` is `public`.
 
-### Why file-include, not `<ProjectReference>`
+### Why the extraction (historical note)
 
-The originally-proposed shape was `<ProjectReference>` to
-`Chronicle.csproj` + `InternalsVisibleTo("Chronicle.Tests")`. That
-shape **builds** but **does not run**:
-
-- `Chronicle.csproj` is `OutputType=WinExe` + `UseWinUI=true` +
-  references `Microsoft.WindowsAppSDK`. The SDK's `.targets` inject a
-  `<Module>` static constructor into `Chronicle.dll` that calls
-  `Microsoft.Windows.ApplicationModel.WindowsAppRuntime.Bootstrap.Initialize()`.
-- Any test that touches any Chronicle type loads `Chronicle.dll`,
-  fires the `<Module>` cctor, and throws
-  `System.Runtime.InteropServices.COMException : Class not registered
-  (0x80040154 REGDB_E_CLASSNOTREG)`. The non-packaged test host has
-  no MSIX context to provide WindowsAppRuntime activation.
-
-Future agents picking this up cold: do not re-attempt
-`<ProjectReference>` without first solving the bootstrap problem.
-See "Future paths back to `<ProjectReference>`" below for the two
-known approaches.
-
-### Why `Models/Calendar.cs` is excluded
-
-`Calendar.cs` initializes `Color` from `ColorHelper.AppAccentHex`,
-and `Helpers/ColorHelper.cs` references `Windows.UI.Color` /
-`Helpers/Theme.cs`. File-including either would drag `Windows.UI`
-into the test compile. `Calendar` isn't in Layer 1's file list
-anyway; its CRUD contract is exercised at Layer 3 once
-`CalendarRepository` testing lands.
+The first scaffold (commit `fd6579b`) could **not** use a
+`<ProjectReference>` to the app: `Chronicle.csproj` was
+`OutputType=WinExe` + `UseWinUI=true`, so the WindowsAppSDK injected a
+`<Module>` initializer into `Chronicle.dll` calling
+`WindowsAppRuntime.Bootstrap.Initialize()`. Any test touching any
+Chronicle type threw `REGDB_E_CLASSNOTREG` in the non-packaged test
+host. The stopgap was compiling pure source files directly into the
+test assembly via `<Compile Include>`. Extracting `Chronicle.Core`
+removed the welded-together structure that caused this, so the
+file-include stopgap is gone. Do not reintroduce it.
 
 ### Framework choice: xUnit
 
-Selected over MSTest and NUnit. xUnit is the de facto standard for
-new .NET projects, has the cleanest setup model (constructor +
+Selected over MSTest and NUnit. xUnit is the de facto standard for new
+.NET projects, has the cleanest setup model (constructor +
 `IDisposable`/`IAsyncLifetime` instead of `[TestInitialize]` /
-`[TestCleanup]`), and `[Theory]` + `[InlineData]` is essential for
-the parameterized recurrence-rule cases the suite is built around.
+`[TestCleanup]`), and `[Theory]` + `[InlineData]` is essential for the
+parameterized recurrence-rule cases the suite is built around.
 Stay-boring constraints (no mocking framework, no snapshot framework,
 no FluentAssertions — use built-in `Assert.*`) apply universally; see
 the "Principles" section above.
 
+### Repo conventions adopted alongside the extraction
+
+- **`Directory.Build.props`** — shared `Nullable=enable`,
+  `LangVersion=latest`, `ImplicitUsings=disable` (matching Chronicle's
+  explicit-using style) for all three projects.
+- **`Directory.Packages.props` (Central Package Management)** — every
+  NuGet version declared once; project files reference packages without
+  a `Version`. Kills the app/Core/test version-drift problem.
+- **`global.json`** — pins the SDK (`10.0.301`, `rollForward:
+  latestMinor`) for reproducible builds on a fresh machine.
+- **`<IsAotCompatible>true</IsAotCompatible>` on `Chronicle.Core`** —
+  turns the DECISIONS.md AOT/trim guardrail into a compiler check.
+  Currently emits zero warnings.
+
 ### When Layer 3 lands
 
-Layer 3 SQLite repository tests will need:
+Layer 3 SQLite repository tests now need only:
 
-- `<Compile Include="..\..\Data\**\*.cs" />` in the test csproj.
-- `<PackageReference Include="Microsoft.Data.Sqlite" />` on the test
-  project, version-pinned to match `Chronicle.csproj`.
-- The `AppDatabase` test seam (see "Testability Seams Needed"
-  below) — required at this point because the file-included
-  `AppDatabase` static initializer touches
-  `ApplicationData.Current.LocalFolder.Path`, which throws in a
-  non-packaged test host the moment any `AppDatabase` member is
-  referenced.
+- A `<ProjectReference>`-visible `AppDatabase.Initialize(string dbPath)`
+  — **already done.** The extraction made the path seam mandatory; the
+  app passes the `ApplicationData.Current.LocalFolder.Path` location,
+  tests pass an isolated temp path. `Windows.Storage` no longer appears
+  in `Chronicle.Core`.
+- `Schema.sql` at the test output's `Data/Schema.sql` — **already
+  flows** there via Core's content copy (verified in all three project
+  outputs).
 
-### Future paths back to `<ProjectReference>`
-
-Two known approaches, neither yet warranted:
-
-- **Suppress bootstrap auto-init in `Chronicle.csproj`.** Set
-  `<WindowsAppSdkBootstrapInitialize>false</WindowsAppSdkBootstrapInitialize>`
-  and
-  `<WindowsAppSdkDeploymentManagerInitialize>false</WindowsAppSdkDeploymentManagerInitialize>`.
-  Skips the `<Module>` injection. Fine for MSIX-packaged
-  distribution; would change how unpackaged `dotnet run` against the
-  app behaves. Revisit only if MSIX-only distribution is the decided
-  production path.
-- **Extract `Chronicle.Core`.** A library project containing the
-  pure domain (`Models/`, the non-UI parts of `Helpers/`, eventually
-  `Data/`). `Chronicle.csproj` and `Chronicle.Tests.csproj` both
-  reference it. Cleanest architectural answer but a real
-  restructure. Revisit when the test surface stops being purely
-  domain — e.g. when popover or renderer logic gains test-worthy
-  pieces that file-include can no longer cleanly accommodate.
-
-### Tradeoff being accepted
-
-File-include creates a separate compilation of the included files in
-the test assembly — the "second compilation shape" risk noted in the
-Principles section. It earns its keep on every new file needing
-inclusion (the `Calendar.cs` exclusion was discovered exactly this
-way). The risk is bounded today because included files are pure value
-types and helpers with no UI or storage surface.
+The one open Layer 3 consideration: `AppDatabase` holds the path in
+static state, and xUnit runs test classes in parallel by default. DB
+test classes must either share one fixture or be placed in a single
+non-parallel xUnit collection so they don't stomp each other's path.
+Decide this when the first repository test is written.
 
 ### CI and dependency discipline
 
 `dotnet test` runs locally; PR runs are to come via GitHub Actions on
-`windows-latest` (required by the production project's TFM for the
-build step; the test project's plain `net8.0` TFM is compatible).
-Any new test package is still a dependency — justify it as test-only
-and exclude it from the shipped app. Production dependencies remain
-subject to the `DECISIONS.md` "No New Dependencies Without
-Justification" rule.
+`windows-latest` (the app's TFM needs Windows; Core and the test
+project are plain `net8.0` and would build anywhere, but one Windows
+runner covers all three). Any new test package is still a dependency —
+justify it as test-only and exclude it from the shipped app.
+Production dependencies remain subject to the `DECISIONS.md` "No New
+Dependencies Without Justification" rule.
 
 ## Testability Seams Needed
 
 The current codebase is close to testable, but a few small seams would pay off.
 
-### Database Path Override
+### Database Path Override — done
 
-`AppDatabase` currently stores `chronicle.db` under
-`ApplicationData.Current.LocalFolder.Path`. That is correct for the app, but
-repository tests need isolated temporary databases.
+**Resolved during the `Chronicle.Core` extraction.** `AppDatabase` no
+longer resolves its own path or references `Windows.Storage`. The
+signature is now `AppDatabase.Initialize(string dbPath)`: the app
+passes `Path.Combine(ApplicationData.Current.LocalFolder.Path,
+"chronicle.db")` from `App.OnLaunched` (the `Windows.Storage` lookup
+lives only there, at the app boundary), and tests pass an isolated
+temp path. The earlier static-initialization trap — a static field
+eagerly calling `ApplicationData.Current` — is gone because the lookup
+moved out of `Chronicle.Core` entirely.
 
-There is an important static-initialization trap: `DbPath` is currently a
-static field initialized from `ApplicationData.Current.LocalFolder.Path`.
-Unpackaged test processes can throw when that lookup happens, and they can do
-so as soon as any `AppDatabase` member is touched. A test seam must therefore
-move the `ApplicationData.Current` lookup behind a production-only lazy path,
-not merely add a new `InitializeForPath(...)` method next to the existing field.
+Remaining caveat for Layer 3: the path is held in static state and
+xUnit parallelizes test classes, so repository tests must share a
+fixture or live in one non-parallel collection. See "When Layer 3
+lands" above.
 
-Add a narrow internal test seam, for example:
-
-- `AppDatabase.InitializeForPath(string dbPath, string schemaPath)`
-- or an internal connection factory override
-- or an internal `AppDatabaseOptions` used only by tests
-
-The seam should preserve the production default and avoid introducing a DI
-container. Its purpose is only to let tests run repositories against temporary
-SQLite files.
-
-Why this prevents later difficulty:
+Why this mattered:
 
 Provider sync will rely on bulk inserts, updates, deletes, and conflict
-resolution. Without real isolated database tests, sync bugs will be discovered
-only through manual app use, after data has already been mutated.
+resolution. Without real isolated database tests, sync bugs would be
+discovered only through manual app use, after data has already been
+mutated. The seam makes those tests possible.
 
 ### Projection Helper Extraction
 
@@ -570,7 +562,12 @@ SQLite databases.
 
 Work:
 
-- add a narrow `AppDatabase` test seam
+- ✓ narrow `AppDatabase` test seam (`Initialize(string dbPath)`, done in
+  the Core extraction)
+- reference `Chronicle.Core`'s `Data/` is already available via the
+  existing `ProjectReference` — no csproj change needed
+- decide the parallelism story for DB tests (shared fixture or a single
+  non-parallel xUnit collection, given `AppDatabase`'s static path)
 - test schema initialization and migrations
 - test calendar/event/override CRUD
 - test cascade delete behavior
