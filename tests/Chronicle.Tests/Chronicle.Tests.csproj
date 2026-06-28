@@ -1,0 +1,60 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      Plain net8.0, no Windows surface. The test project compiles only
+      pure domain files (Models/, Helpers/DateHelpers.cs) so it has no
+      WinUI, no MSIX, no WindowsAppRuntime dependency.
+
+      Why not <ProjectReference Include="..\..\Chronicle.csproj">? The
+      production project is OutputType=WinExe + UseWinUI=true, which
+      injects a <Module> initializer into Chronicle.dll that calls
+      Microsoft.Windows.ApplicationModel.WindowsAppRuntime.Bootstrap.
+      Initialize(). Touching any Chronicle type from a non-packaged test
+      host throws REGDB_E_CLASSNOTREG before the test body runs. The
+      build works; runtime does not. .context/TESTING.md authorized
+      file-include as the documented fallback when the direct project
+      reference is blocked — this is that case.
+
+      Tradeoff (also flagged in TESTING.md): this creates a second
+      compilation shape that can drift from the app. Bounded today
+      because the included files are pure value types and helpers; if
+      the test surface needs Data/ or any UI-adjacent type, reconsider
+      whether a Chronicle.Core library extraction is finally earned.
+    -->
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.4" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      Pure domain sources, compiled directly into the test assembly.
+      Excluded:
+        - Helpers/ColorHelper.cs and Helpers/Theme.cs — pull in
+          Microsoft.UI / Windows.UI types, no test value at this layer.
+        - Models/Calendar.cs — its default-color initializer references
+          ColorHelper.AppAccentHex. Calendar is not in TESTING.md's
+          Layer 1 list; its CRUD contract is exercised at Layer 3
+          (CalendarRepository) once SQLite test infrastructure lands.
+    -->
+    <Compile Include="..\..\Models\**\*.cs"
+             Exclude="..\..\Models\Calendar.cs"
+             LinkBase="ChronicleSources\Models" />
+    <Compile Include="..\..\Helpers\DateHelpers.cs" LinkBase="ChronicleSources\Helpers" />
+  </ItemGroup>
+
+</Project>

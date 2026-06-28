@@ -168,43 +168,123 @@ fails to grow with the calendar. The point is not exhaustive coverage of every
 new feature — it is that the feature does not ship without exercising the
 contracts it touches.
 
-## Proposed Test Project
+## Test Project Shape
 
-Add a separate test project, likely `Chronicle.Tests`.
+The test project is `tests/Chronicle.Tests/Chronicle.Tests.csproj`,
+added to `Chronicle.slnx` under a `/tests/` solution folder. Run with
+`dotnet test tests/Chronicle.Tests/Chronicle.Tests.csproj`.
 
-Preferred shape:
+### Current shape (what landed)
 
-- target `net8.0-windows10.0.19041.0`
-- reference `Chronicle.csproj`
-- use one mainstream .NET test framework
-- keep tests organized by production area
+- TFM: **`net8.0`** (plain, no Windows surface).
+- Framework: **xUnit** (`xunit`, `xunit.runner.visualstudio`,
+  `Microsoft.NET.Test.Sdk`, `coverlet.collector`).
+- Properties: `IsPackable=false`, `IsTestProject=true`,
+  `Nullable=enable`.
+- Pure domain sources are compiled directly into the test assembly
+  via `<Compile Include>`: all of `Models/**/*.cs` (excluding
+  `Models/Calendar.cs` — see below) and `Helpers/DateHelpers.cs`.
+- `Chronicle.csproj` is **not** referenced via `<ProjectReference>`.
+  See "Why file-include" below.
 
-Start by referencing `Chronicle.csproj` directly, with
-`InternalsVisibleTo("Chronicle.Tests")` if internal helpers need to be tested.
-This keeps tests pointed at the same compiled code the app ships. It may carry
-WinUI build overhead, but that is acceptable until it proves painful.
+In `Chronicle.csproj`, the only production-side change is
+`<DefaultItemExcludes>$(DefaultItemExcludes);tests\**</DefaultItemExcludes>` —
+prevents the SDK's implicit `*.cs` glob from pulling test sources
+into the production compile.
 
-Avoid compiling selected production files into the test project unless the
-direct project reference is blocked. Duplicating `Models/**/*.cs` into tests is
-lighter, but it creates a second compilation shape that can drift from the app.
+### Why file-include, not `<ProjectReference>`
 
-Do not extract a `Chronicle.Core` library just to make the first tests easy.
-That may become the right architecture later, but doing it now would be a
-speculative restructure.
+The originally-proposed shape was `<ProjectReference>` to
+`Chronicle.csproj` + `InternalsVisibleTo("Chronicle.Tests")`. That
+shape **builds** but **does not run**:
 
-MSTest is a reasonable first choice because it fits the Microsoft/.NET/Windows
-stack and avoids adding a more opinionated testing ecosystem. xUnit is also
-acceptable if the project already prefers it later. The important constraint is
-that the framework should stay boring: no mocking framework, no snapshot
-framework, no UI automation framework in the first wave.
+- `Chronicle.csproj` is `OutputType=WinExe` + `UseWinUI=true` +
+  references `Microsoft.WindowsAppSDK`. The SDK's `.targets` inject a
+  `<Module>` static constructor into `Chronicle.dll` that calls
+  `Microsoft.Windows.ApplicationModel.WindowsAppRuntime.Bootstrap.Initialize()`.
+- Any test that touches any Chronicle type loads `Chronicle.dll`,
+  fires the `<Module>` cctor, and throws
+  `System.Runtime.InteropServices.COMException : Class not registered
+  (0x80040154 REGDB_E_CLASSNOTREG)`. The non-packaged test host has
+  no MSIX context to provide WindowsAppRuntime activation.
 
-Any new test package is still a dependency. It should be justified as test-only
-and excluded from the shipped app. Production dependencies remain subject to
-the `DECISIONS.md` "No New Dependencies Without Justification" rule.
+Future agents picking this up cold: do not re-attempt
+`<ProjectReference>` without first solving the bootstrap problem.
+See "Future paths back to `<ProjectReference>`" below for the two
+known approaches.
 
-The suite should run locally with `dotnet test` and on every pull request. A
-test suite that only runs when a developer remembers to invoke it catches too
-little too late.
+### Why `Models/Calendar.cs` is excluded
+
+`Calendar.cs` initializes `Color` from `ColorHelper.AppAccentHex`,
+and `Helpers/ColorHelper.cs` references `Windows.UI.Color` /
+`Helpers/Theme.cs`. File-including either would drag `Windows.UI`
+into the test compile. `Calendar` isn't in Layer 1's file list
+anyway; its CRUD contract is exercised at Layer 3 once
+`CalendarRepository` testing lands.
+
+### Framework choice: xUnit
+
+Selected over MSTest and NUnit. xUnit is the de facto standard for
+new .NET projects, has the cleanest setup model (constructor +
+`IDisposable`/`IAsyncLifetime` instead of `[TestInitialize]` /
+`[TestCleanup]`), and `[Theory]` + `[InlineData]` is essential for
+the parameterized recurrence-rule cases the suite is built around.
+Stay-boring constraints (no mocking framework, no snapshot framework,
+no FluentAssertions — use built-in `Assert.*`) apply universally; see
+the "Principles" section above.
+
+### When Layer 3 lands
+
+Layer 3 SQLite repository tests will need:
+
+- `<Compile Include="..\..\Data\**\*.cs" />` in the test csproj.
+- `<PackageReference Include="Microsoft.Data.Sqlite" />` on the test
+  project, version-pinned to match `Chronicle.csproj`.
+- The `AppDatabase` test seam (see "Testability Seams Needed"
+  below) — required at this point because the file-included
+  `AppDatabase` static initializer touches
+  `ApplicationData.Current.LocalFolder.Path`, which throws in a
+  non-packaged test host the moment any `AppDatabase` member is
+  referenced.
+
+### Future paths back to `<ProjectReference>`
+
+Two known approaches, neither yet warranted:
+
+- **Suppress bootstrap auto-init in `Chronicle.csproj`.** Set
+  `<WindowsAppSdkBootstrapInitialize>false</WindowsAppSdkBootstrapInitialize>`
+  and
+  `<WindowsAppSdkDeploymentManagerInitialize>false</WindowsAppSdkDeploymentManagerInitialize>`.
+  Skips the `<Module>` injection. Fine for MSIX-packaged
+  distribution; would change how unpackaged `dotnet run` against the
+  app behaves. Revisit only if MSIX-only distribution is the decided
+  production path.
+- **Extract `Chronicle.Core`.** A library project containing the
+  pure domain (`Models/`, the non-UI parts of `Helpers/`, eventually
+  `Data/`). `Chronicle.csproj` and `Chronicle.Tests.csproj` both
+  reference it. Cleanest architectural answer but a real
+  restructure. Revisit when the test surface stops being purely
+  domain — e.g. when popover or renderer logic gains test-worthy
+  pieces that file-include can no longer cleanly accommodate.
+
+### Tradeoff being accepted
+
+File-include creates a separate compilation of the included files in
+the test assembly — the "second compilation shape" risk noted in the
+Principles section. It earns its keep on every new file needing
+inclusion (the `Calendar.cs` exclusion was discovered exactly this
+way). The risk is bounded today because included files are pure value
+types and helpers with no UI or storage surface.
+
+### CI and dependency discipline
+
+`dotnet test` runs locally; PR runs are to come via GitHub Actions on
+`windows-latest` (required by the production project's TFM for the
+build step; the test project's plain `net8.0` TFM is compatible).
+Any new test package is still a dependency — justify it as test-only
+and exclude it from the shipped app. Production dependencies remain
+subject to the `DECISIONS.md` "No New Dependencies Without
+Justification" rule.
 
 ## Testability Seams Needed
 
@@ -471,14 +551,14 @@ command line and proves the core recurrence model.
 
 Minimum useful set:
 
-- create `Chronicle.Tests`
+- ✓ create `Chronicle.Tests` (scaffolded; see "Test Project Shape")
+- ✓ verify the app still builds
+- ✓ verify the tests run locally (smoke tests pass)
 - add tests for `RecurrenceRule`
 - add tests for `RecurrenceExpander`
 - add tests for `Event`, `EventKey`, and `EventRef`
 - add tests for `DateHelpers`
-- verify the app still builds
-- verify the tests run locally
-- verify the tests run on pull requests
+- verify the tests run on pull requests (CI not yet wired)
 
 This gives immediate protection to the highest-risk local behavior without
 touching repositories or WinUI.

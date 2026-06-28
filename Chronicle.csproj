@@ -14,6 +14,12 @@
     <Nullable>enable</Nullable>
     <DisableXamlGeneratedCodeBehind>False</DisableXamlGeneratedCodeBehind>
     <DisableProgramGeneration>True</DisableProgramGeneration>
+    <!--
+      The implicit SDK glob would pull tests/**/*.cs into this project's
+      Compile items because the test project lives under the repo root.
+      Exclude it so the production project compiles only its own sources.
+    -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);tests\**</DefaultItemExcludes>
   </PropertyGroup>
   <ItemGroup>
     <None Remove="Data\Schema.sql" />
