@@ -1,0 +1,17 @@
+<Project>
+
+  <!--
+    Shared MSBuild properties for every project in the repo (app, core,
+    tests). Project-specific settings stay in each .csproj. Keep this file
+    to settings that are genuinely universal and safe to apply everywhere.
+
+    ImplicitUsings is disabled to match Chronicle's established explicit-
+    using style; all source files declare their usings explicitly.
+  -->
+  <PropertyGroup>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>disable</ImplicitUsings>
+  </PropertyGroup>
+
+</Project>

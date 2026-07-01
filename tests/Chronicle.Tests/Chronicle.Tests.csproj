@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      Plain net8.0. References Chronicle.Core via a conventional
+      <ProjectReference> — Core carries no WinUI / WindowsAppSDK surface,
+      so there is no bootstrap module-initializer to trip a non-packaged
+      test host. (The earlier file-include workaround existed only because
+      the domain lived inside the WinExe project; see git history and
+      .context/TESTING.md.)
+    -->
+    <TargetFramework>net8.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Versions are centralized in Directory.Packages.props (CPM). -->
+    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Chronicle.Core\Chronicle.Core.csproj" />
+  </ItemGroup>
+
+</Project>

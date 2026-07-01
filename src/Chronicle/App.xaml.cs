@@ -1,8 +1,7 @@
 ﻿using Chronicle.Data;
-using Chronicle.Data.Repositories;
 using Microsoft.UI.Xaml;
-using System;
-using System.Diagnostics;
+using System.IO;
+using Windows.Storage;
 
 // To learn more about WinUI, the WinUI project structure,
 // and more about our project templates, see: http://aka.ms/winui-project-info.
@@ -33,9 +32,13 @@ namespace Chronicle
         protected override async void OnLaunched(
             LaunchActivatedEventArgs args)
         {
-            AppDatabase.Initialize();
+            // The app owns where the database lives; AppDatabase (in
+            // Chronicle.Core) stays free of any Windows.Storage dependency.
+            AppDatabase.Initialize(
+                Path.Combine(
+                    ApplicationData.Current.LocalFolder.Path,
+                    "chronicle.db"));
 
-    
             _window = new MainWindow();
     
             _window.Activate();

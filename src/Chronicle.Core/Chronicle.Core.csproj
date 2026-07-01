@@ -1,0 +1,51 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      Pure domain library: Models, Data (SQLite persistence), and the
+      non-UI helpers. Plain net8.0, no WinUI, no MSIX, no WindowsAppSDK.
+      This is the assembly the test project references conventionally and
+      the WinUI app builds on top of.
+    -->
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>Chronicle</RootNamespace>
+    <AssemblyName>Chronicle.Core</AssemblyName>
+
+    <!--
+      Turns the DECISIONS.md "AOT / Trimming Compatibility" guardrail into
+      a compiler check: trim/AOT analyzers warn the moment domain code
+      introduces a reflection or trim hazard. Warnings are informational
+      for now (the build is not warnings-as-errors), so a trim note from
+      Microsoft.Data.Sqlite will surface without failing the build.
+    -->
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      DateHelpers (and its MonthGrid struct) are internal; the WinUI app's
+      renderers and the test project both consume them. Exposing internals
+      here preserves their visibility without widening the public surface.
+    -->
+    <InternalsVisibleTo Include="Chronicle" />
+    <InternalsVisibleTo Include="Chronicle.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      Schema.sql ships next to the assembly so AppDatabase can read it from
+      AppContext.BaseDirectory at runtime. Content flows to any project that
+      references Chronicle.Core (the app and the test project), so both get
+      the file in their output. Always-copy mirrors the previous app-project
+      setting (see the comment history in the old Chronicle.csproj).
+    -->
+    <None Update="Data\Schema.sql">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

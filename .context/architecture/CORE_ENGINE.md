@@ -14,6 +14,26 @@ External systems adapt into Chronicle.
 Provider-specific concepts must never leak into the UI or persistence
 layers.
 
+## Assembly Layout
+
+This philosophy is enforced by an assembly boundary, not just
+convention. The repo uses a conventional `src/` + `tests/` layout:
+
+- **`src/Chronicle.Core`** (plain `net8.0`) — the domain: `Models/`,
+  `Data/` (SQLite repositories + `AppDatabase`), `Helpers/DateHelpers`.
+  No WinUI, no WindowsAppSDK. This is the source of truth the rest of
+  the system builds on.
+- **`src/Chronicle`** (WinUI app) — `Views/`, renderers, popovers,
+  `App.xaml`, and the UI-only helpers (`ColorHelper`, `Theme`).
+  References `Chronicle.Core`.
+- **`tests/Chronicle.Tests`** (xUnit) — references `Chronicle.Core`.
+
+The domain cannot take a dependency on the UI because `Chronicle.Core`
+has no reference to the app. A would-be `Provider → UI` shortcut is a
+compile error, not a code-review catch. See `DECISIONS.md` "Domain
+Extracted to Chronicle.Core" for why this split happened, and
+`.context/TESTING.md` for the test-project shape.
+
 ## Domain Model Overview
 
 Three entities form the calendar:

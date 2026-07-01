@@ -447,3 +447,60 @@ Constraints:
 Status:
 - Temporary, intentionally non-architectural UI deviation.
 - To be revisited in design overhaul phase.
+
+---
+
+## Domain Extracted to Chronicle.Core (2026-06-28)
+
+Reason:
+
+The test suite could not reference the app project conventionally. The
+single `Chronicle.csproj` was both the WinUI executable
+(`OutputType=WinExe` + `UseWinUI=true`) and the home of all domain code,
+so the WindowsAppSDK injected a bootstrap `<Module>` initializer into
+`Chronicle.dll`. Any test touching any Chronicle type threw
+`REGDB_E_CLASSNOTREG` in a non-packaged host. The first scaffold worked
+around this by compiling pure source files into the test assembly
+(`<Compile Include>`); that stopgap had a known drift risk and would not
+extend cleanly to the `Data/` layer.
+
+Decision:
+
+Extract a `Chronicle.Core` class library (plain `net8.0`) holding the
+pure domain — `Models/`, `Data/`, `Helpers/DateHelpers.cs`. The WinUI
+app and the test project both reference it via `<ProjectReference>`. The
+repo moved to the conventional `src/` + `tests/` layout
+(`src/Chronicle`, `src/Chronicle.Core`, `tests/Chronicle.Tests`) so no
+project's compile glob overlaps another's — eliminating the
+`DefaultItemExcludes` workaround the root-level app project would
+otherwise need.
+
+This is not new architecture. The architecture docs already described
+Chronicle as a domain the UI and persistence adapt into; the extraction
+makes that an enforced assembly boundary rather than a prose convention.
+None of the existing guardrails (no MVVM, no DI, AOT-friendly, idle
+budget, no new deps) caused the bump or were touched by the fix.
+
+Two couplings were severed to let the domain compile without WinUI:
+
+- `AppDatabase` no longer resolves its own path via `Windows.Storage`;
+  it takes `Initialize(string dbPath)` and the app supplies the
+  `ApplicationData` location at the boundary. (This is the test seam
+  `TESTING.md` already wanted, now mandatory.)
+- `Calendar`'s default color constant moved into the domain
+  (`Calendar.DefaultColorHex`); the UI-layer `ColorHelper` re-exposes
+  it.
+
+Repo conventions adopted in the same pass (build-time only, no runtime
+dependencies, so consistent with "No New Dependencies"):
+
+- `Directory.Build.props` — shared `Nullable` / `LangVersion` /
+  `ImplicitUsings=disable`.
+- `Directory.Packages.props` — Central Package Management; one source of
+  truth for NuGet versions across the three projects.
+- `global.json` — SDK pin for reproducible builds on a fresh machine.
+- `<IsAotCompatible>true</IsAotCompatible>` on `Chronicle.Core` — makes
+  the AOT/Trimming guardrail a compiler check instead of prose.
+
+Operational detail (test project shape, Layer 3 parallelism caveat,
+Schema.sql propagation) lives in `.context/TESTING.md`.

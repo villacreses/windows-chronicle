@@ -2,16 +2,21 @@ using Microsoft.Data.Sqlite;
 using System;
 using System.Collections.Generic;
 using System.IO;
-using Windows.Storage;
 
 namespace Chronicle.Data;
 
 public static class AppDatabase
 {
-    private static readonly string DbPath =
-        Path.Combine(
-            ApplicationData.Current.LocalFolder.Path,
-            "chronicle.db");
+    // Set once by Initialize. The app passes the per-user database path
+    // (resolved from Windows.Storage at the app boundary); tests pass an
+    // isolated temp path. Keeping the Windows.Storage lookup out of this
+    // library is what lets Chronicle.Core run under a plain test host.
+    private static string? _dbPath;
+
+    private static string DbPath =>
+        _dbPath ?? throw new InvalidOperationException(
+            "AppDatabase.Initialize(dbPath) must be called before the "
+            + "database is accessed.");
 
     private static readonly string SchemaPath =
         Path.Combine(
@@ -19,8 +24,10 @@ public static class AppDatabase
             "Data",
             "Schema.sql");
 
-    public static void Initialize()
+    public static void Initialize(string dbPath)
     {
+        _dbPath = dbPath;
+
         using var connection =
             new SqliteConnection($"Data Source={DbPath}");
 
