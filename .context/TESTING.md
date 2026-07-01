@@ -187,7 +187,10 @@ tests/
 ```
 
 Run tests with `dotnet test tests/Chronicle.Tests/Chronicle.Tests.csproj`
-or `dotnet test Chronicle.slnx`.
+— no platform needed, since `Chronicle.Core` and the test project are
+AnyCPU `net8.0`. The solution-wide form pulls in the WinUI app, which
+has no AnyCPU configuration, so it requires a platform:
+`dotnet test Chronicle.slnx -p:Platform=x64`.
 
 ### `Chronicle.Core` is the domain library
 
@@ -275,10 +278,16 @@ Decide this when the first repository test is written.
 
 ### CI and dependency discipline
 
-`dotnet test` runs locally; PR runs are to come via GitHub Actions on
-`windows-latest` (the app's TFM needs Windows; Core and the test
-project are plain `net8.0` and would build anywhere, but one Windows
-runner covers all three). Any new test package is still a dependency —
+`dotnet test` runs locally; PR runs are to come via GitHub Actions.
+The extraction made `Chronicle.Core` and the test project plain
+`net8.0` with no Windows surface, so the **test job can run on
+`ubuntu-latest`** (fast, cheap): `dotnet test
+tests/Chronicle.Tests/Chronicle.Tests.csproj` builds only Core + the
+tests, never the WinUI app. An **optional second job on
+`windows-latest`** can gate on the app still compiling
+(`dotnet build src/Chronicle -p:Platform=x64`, which needs the Windows
+SDK / WinUI workload). Whether to add that app-build gate is a decision
+for when CI is wired. Any new test package is still a dependency —
 justify it as test-only and exclude it from the shipped app.
 Production dependencies remain subject to the `DECISIONS.md` "No New
 Dependencies Without Justification" rule.
@@ -318,7 +327,10 @@ coverage, and visibility filtering. Some of that is pure calendar logic mixed
 with UI coordination.
 
 Extract only the pure pieces when tests need them, likely into an internal
-helper such as `EventProjectionService` or `EventProjectionHelper`:
+helper such as `EventProjectionService` or `EventProjectionHelper` **placed in
+`Chronicle.Core`** — the pure projection logic belongs in the domain library;
+`MainWindow` (in `src/Chronicle`) calls into it. Living in Core is what lets the
+test project reach it via the existing `ProjectReference`. Candidate pieces:
 
 - group overrides by series
 - expand recurring master rows
@@ -350,9 +362,11 @@ provider — to leak its shape into UI code.
 
 ### Timeline Packing Extraction
 
-`TimelineRenderHelper` has overlap-packing logic that is currently private.
-If day/week layout regressions appear, extract the packing algorithm into an
-internal pure helper and test it directly.
+`TimelineRenderHelper` (in `src/Chronicle/Views/Rendering`) has overlap-packing
+logic that is currently private. If day/week layout regressions appear, extract
+the packing algorithm — pure geometry over start/end times, no WinUI — into an
+internal helper **in `Chronicle.Core`** and test it directly via the
+`ProjectReference`. Leave the `UIElement`-building in the renderer.
 
 Why this prevents later difficulty:
 
@@ -365,16 +379,16 @@ packing result is cheaper than repeatedly verifying dense calendars by eye.
 
 These should be added first.
 
-Files:
+Files (all under `src/Chronicle.Core/`):
 
-- `Models/Recurrence/RecurrenceRule.cs`
-- `Models/Recurrence/RecurrenceExpander.cs`
-- `Models/Recurrence/EventKey.cs`
-- `Models/Recurrence/EventRef.cs`
-- `Models/Event.cs`
-- `Models/Recurrence/EventOverride.cs`
-- `Models/Recurrence/OverrideFields.cs`
-- `Helpers/DateHelpers.cs`
+- `src/Chronicle.Core/Models/Recurrence/RecurrenceRule.cs`
+- `src/Chronicle.Core/Models/Recurrence/RecurrenceExpander.cs`
+- `src/Chronicle.Core/Models/Recurrence/EventKey.cs`
+- `src/Chronicle.Core/Models/Recurrence/EventRef.cs`
+- `src/Chronicle.Core/Models/Event.cs`
+- `src/Chronicle.Core/Models/Recurrence/EventOverride.cs`
+- `src/Chronicle.Core/Models/Recurrence/OverrideFields.cs`
+- `src/Chronicle.Core/Helpers/DateHelpers.cs`
 
 Core cases:
 
@@ -402,8 +416,8 @@ These are the most important tests in the suite.
 
 Files:
 
-- `Models/Recurrence/RecurrenceExpander.cs`
-- `Models/Recurrence/EventOverride.cs`
+- `src/Chronicle.Core/Models/Recurrence/RecurrenceExpander.cs`
+- `src/Chronicle.Core/Models/Recurrence/EventOverride.cs`
 
 Core cases:
 
@@ -447,13 +461,13 @@ space instead of redefining it.
 
 ### Layer 3: SQLite Repository Tests
 
-Files:
+Files (all under `src/Chronicle.Core/`):
 
-- `Data/AppDatabase.cs`
-- `Data/Repositories/CalendarRepository.cs`
-- `Data/Repositories/EventRepository.cs`
-- `Data/Repositories/OverrideRepository.cs`
-- `Data/Schema.sql`
+- `src/Chronicle.Core/Data/AppDatabase.cs`
+- `src/Chronicle.Core/Data/Repositories/CalendarRepository.cs`
+- `src/Chronicle.Core/Data/Repositories/EventRepository.cs`
+- `src/Chronicle.Core/Data/Repositories/OverrideRepository.cs`
+- `src/Chronicle.Core/Data/Schema.sql`
 
 Use temporary database files and real SQLite connections.
 
@@ -491,8 +505,11 @@ flowing into it.
 
 Files after small extraction:
 
-- event projection helper extracted from `Views/MainWindow.xaml.cs`
-- `Helpers/DateHelpers.cs`
+- event projection helper extracted from
+  `src/Chronicle/Views/MainWindow.xaml.cs` — the extracted pure helper lands
+  in `src/Chronicle.Core/` (see "Projection Helper Extraction" above), so the
+  test project reaches it through the existing `ProjectReference`.
+- `src/Chronicle.Core/Helpers/DateHelpers.cs`
 
 Core cases:
 
