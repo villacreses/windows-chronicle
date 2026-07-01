@@ -146,6 +146,13 @@ namespace Chronicle
         /// </summary>
         private async Task ReloadCalendarsAndRefreshAsync()
         {
+            // Enforce the "always at least one calendar" invariant before the
+            // first load and after every calendar mutation (including deleting
+            // the last one, which routes back through here): a fresh or emptied
+            // database self-heals with a "Default" calendar instead of leaving
+            // the UI in a dead-end empty state where day-clicks silently no-op.
+            await _calendarRepository.EnsureDefaultAsync();
+
             _allCalendars = await _calendarRepository.GetAllAsync();
 
             foreach (var cal in _allCalendars)

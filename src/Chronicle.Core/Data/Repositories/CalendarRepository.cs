@@ -154,4 +154,36 @@ public sealed class CalendarRepository
 
         return calendars;
     }
+
+    /// <summary>
+    /// Enforces the app-level invariant that at least one calendar always
+    /// exists: if the Calendars table is empty, inserts a single "Default"
+    /// calendar (teal accent). Idempotent — a no-op the moment any calendar
+    /// exists — so it is safe to call on every startup and after any calendar
+    /// delete. Deliberately not folded into <see cref="AppDatabase.Initialize"/>
+    /// so the test host's isolated databases stay empty unless a test opts in.
+    /// </summary>
+    public async Task EnsureDefaultAsync()
+    {
+        using (var connection = AppDatabase.GetConnection())
+        using (var countCommand = connection.CreateCommand())
+        {
+            countCommand.CommandText =
+                "SELECT COUNT(*) FROM Calendars;";
+
+            var count = Convert.ToInt64(
+                await countCommand.ExecuteScalarAsync());
+
+            if (count > 0)
+                return;
+        }
+
+        await InsertAsync(
+            new Calendar
+            {
+                Id = Guid.NewGuid(),
+                Name = "Default",
+                Color = Calendar.DefaultColorHex,
+            });
+    }
 }
