@@ -377,6 +377,8 @@ packing result is cheaper than repeatedly verifying dense calendars by eye.
 
 ### Layer 1: Pure Domain Tests
 
+**Status (2026-07-03): done.**
+
 These should be added first.
 
 Files (all under `src/Chronicle.Core/`):
@@ -411,6 +413,9 @@ These are the cheapest tests and the most stable contracts. They give immediate
 feedback when a change alters Chronicle's basic calendar language.
 
 ### Layer 2: Recurrence Invariant Tests
+
+**Status (2026-07-03): done** — includes invariant #7 (bad-timezone falls
+back to legacy UTC) and tz-aware UNTIL across a DST boundary.
 
 These are the most important tests in the suite.
 
@@ -461,6 +466,10 @@ space instead of redefining it.
 
 ### Layer 3: SQLite Repository Tests
 
+**Status (2026-07-03): done.** DB tests share a single non-parallel
+`[Collection("Database")]` because `AppDatabase` holds its path in static
+state.
+
 Files (all under `src/Chronicle.Core/`):
 
 - `src/Chronicle.Core/Data/AppDatabase.cs`
@@ -503,6 +512,10 @@ flowing into it.
 
 ### Layer 4: Projection And Cache Tests
 
+**Status (2026-07-03): not started** — blocked on extracting the projection
+helper from `MainWindow` into `Chronicle.Core` (see "Projection Helper
+Extraction" above). To land before Phase B.
+
 Files after small extraction:
 
 - event projection helper extracted from
@@ -531,6 +544,9 @@ cache" model and prevents future provider work from creating a parallel event
 pipeline.
 
 ### Layer 5: Thin UI Logic Tests
+
+**Status (2026-07-03): not started** — awaits the same extraction as Layer 4,
+plus the picker / packing helpers being pulled out of their renderers.
 
 This layer should come after the local core is covered.
 
@@ -563,10 +579,10 @@ Minimum useful set:
 - ✓ create `Chronicle.Tests` (scaffolded; see "Test Project Shape")
 - ✓ verify the app still builds
 - ✓ verify the tests run locally (smoke tests pass)
-- add tests for `RecurrenceRule`
-- add tests for `RecurrenceExpander`
-- add tests for `Event`, `EventKey`, and `EventRef`
-- add tests for `DateHelpers`
+- ✓ add tests for `RecurrenceRule`
+- ✓ add tests for `RecurrenceExpander`
+- ✓ add tests for `Event`, `EventKey`, and `EventRef`
+- ✓ add tests for `DateHelpers`
 - verify the tests run on pull requests (CI not yet wired)
 
 This gives immediate protection to the highest-risk local behavior without
@@ -581,14 +597,15 @@ Work:
 
 - ✓ narrow `AppDatabase` test seam (`Initialize(string dbPath)`, done in
   the Core extraction)
-- reference `Chronicle.Core`'s `Data/` is already available via the
+- ✓ reference `Chronicle.Core`'s `Data/` is already available via the
   existing `ProjectReference` — no csproj change needed
-- decide the parallelism story for DB tests (shared fixture or a single
-  non-parallel xUnit collection, given `AppDatabase`'s static path)
-- test schema initialization and migrations
-- test calendar/event/override CRUD
-- test cascade delete behavior
-- test range query behavior
+- ✓ decide the parallelism story for DB tests — resolved: a single
+  non-parallel `[Collection("Database")]`, given `AppDatabase`'s static
+  path (base classes in `tests/Chronicle.Tests/Data/DatabaseTest.cs`)
+- ✓ test schema initialization and migrations
+- ✓ test calendar/event/override CRUD
+- ✓ test cascade delete behavior
+- ✓ test range query behavior
 
 This is the point where Chronicle starts gaining confidence against data-loss
 classes of bugs.
