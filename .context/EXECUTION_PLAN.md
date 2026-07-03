@@ -28,9 +28,12 @@ anything is built on top of it.
 - Recurrence Phase 2B (wall-clock anchoring via `TimeZoneId`)
 - Test infrastructure: `Chronicle.Core` extraction + `src/`-`tests/`
   layout + xUnit project (see `TESTING.md` / DECISIONS.md "Domain
-  Extracted to Chronicle.Core"). Layers 1–3 landed (pure domain,
-  recurrence invariants + DST, SQLite repositories; ~134 tests). Layers
-  4–5 await the `MainWindow` projection-helper extraction.
+  Extracted to Chronicle.Core"). Layers 1–5 landed (~158 tests): pure
+  domain, recurrence invariants + DST, SQLite repositories, projection +
+  cache (`EventProjection`), and timeline packing (`TimelinePacker`) — the
+  last two after extracting those pure helpers out of `MainWindow` /
+  `TimelineRenderHelper` into `Chronicle.Core`. Layer 5's recurrence-picker
+  target remains deferred.
 
 ### UI CONSTRAINT (TEMPORARY)
 
