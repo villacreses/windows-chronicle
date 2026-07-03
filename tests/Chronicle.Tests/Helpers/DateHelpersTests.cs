@@ -130,4 +130,68 @@ public class DateHelpersTests
         Assert.False(DateHelpers.IsInMonth(new DateTime(2026, 6, 1), month));
         Assert.False(DateHelpers.IsInMonth(new DateTime(2025, 5, 15), month));
     }
+
+    // ── View load ranges (Layer 4: match local calendar boundaries) ──────
+    //
+    // Each range is [local-boundary-midnight → last tick before the next
+    // local-boundary-midnight], expressed in UTC. Assertions round-trip the
+    // UTC bounds back to local so they hold regardless of the machine's zone.
+    // June 2026 is used throughout to stay clear of DST transitions.
+
+    [Fact]
+    public void GetMonthRangeUtc_SpansTheWholeLocalMonth()
+    {
+        var (startUtc, endUtc) = DateHelpers.GetMonthRangeUtc(new DateTime(2026, 6, 1));
+
+        Assert.Equal(DateTimeKind.Utc, startUtc.Kind);
+        Assert.Equal(DateTimeKind.Utc, endUtc.Kind);
+
+        var startLocal = startUtc.ToLocalTime();
+        Assert.Equal(new DateTime(2026, 6, 1), startLocal.Date);
+        Assert.Equal(TimeSpan.Zero, startLocal.TimeOfDay);
+
+        // One tick past the end is local midnight on the 1st of next month.
+        var afterEndLocal = endUtc.AddTicks(1).ToLocalTime();
+        Assert.Equal(new DateTime(2026, 7, 1), afterEndLocal.Date);
+        Assert.Equal(TimeSpan.Zero, afterEndLocal.TimeOfDay);
+    }
+
+    [Fact]
+    public void GetWeekRangeUtc_SpansSundayToSaturdayLocalWeek()
+    {
+        var wednesday = new DateTime(2026, 6, 3);
+        var (startUtc, endUtc) = DateHelpers.GetWeekRangeUtc(wednesday);
+
+        Assert.Equal(DateTimeKind.Utc, startUtc.Kind);
+        Assert.Equal(DateTimeKind.Utc, endUtc.Kind);
+
+        var startLocal = startUtc.ToLocalTime();
+        Assert.Equal(DayOfWeek.Sunday, startLocal.DayOfWeek);
+        Assert.Equal(DateHelpers.GetWeekStart(wednesday).Date, startLocal.Date);
+        Assert.Equal(TimeSpan.Zero, startLocal.TimeOfDay);
+
+        // One tick past the end is local midnight of the following Sunday.
+        var afterEndLocal = endUtc.AddTicks(1).ToLocalTime();
+        Assert.Equal(DateHelpers.GetWeekStart(wednesday).AddDays(7).Date, afterEndLocal.Date);
+        Assert.Equal(TimeSpan.Zero, afterEndLocal.TimeOfDay);
+    }
+
+    [Fact]
+    public void GetDayRangeUtc_SpansTheSingleLocalDay()
+    {
+        var afternoon = new DateTime(2026, 6, 3, 15, 0, 0);
+        var (startUtc, endUtc) = DateHelpers.GetDayRangeUtc(afternoon);
+
+        Assert.Equal(DateTimeKind.Utc, startUtc.Kind);
+        Assert.Equal(DateTimeKind.Utc, endUtc.Kind);
+
+        var startLocal = startUtc.ToLocalTime();
+        Assert.Equal(new DateTime(2026, 6, 3), startLocal.Date);
+        Assert.Equal(TimeSpan.Zero, startLocal.TimeOfDay);
+
+        // One tick past the end is local midnight of the next day.
+        var afterEndLocal = endUtc.AddTicks(1).ToLocalTime();
+        Assert.Equal(new DateTime(2026, 6, 4), afterEndLocal.Date);
+        Assert.Equal(TimeSpan.Zero, afterEndLocal.TimeOfDay);
+    }
 }

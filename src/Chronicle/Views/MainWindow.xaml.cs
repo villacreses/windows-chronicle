@@ -2,6 +2,7 @@ using Chronicle.Data.Repositories;
 using Chronicle.Helpers;
 using Chronicle.Models;
 using Chronicle.Models.Recurrence;
+using Chronicle.Projection;
 using Chronicle.Views.Dialogs;
 using Chronicle.Views.Popovers;
 using Chronicle.Views.Rendering;
@@ -865,7 +866,8 @@ namespace Chronicle
         {
             var (rangeStart, rangeEnd) = GetActiveViewRangeUtc();
 
-            if (rangeStart >= _loadedRangeStartUtc && rangeEnd <= _loadedRangeEndUtc)
+            if (EventProjection.RangeCovered(
+                    _loadedRangeStartUtc, _loadedRangeEndUtc, rangeStart, rangeEnd))
                 return;
 
             // Two queries per range change, regardless of master count.
@@ -884,80 +886,12 @@ namespace Chronicle
                 ? new List<EventOverride>()
                 : await _overrideRepository.GetForSeriesAsync(recurringMasterIds);
 
-            var overridesBySeries = GroupOverridesBySeries(overrides);
+            var overridesBySeries = EventProjection.GroupOverridesBySeries(overrides);
 
-            _projectedEvents = ExpandRecurrences(
+            _projectedEvents = EventProjection.ExpandRecurrences(
                 rows, rangeStart, rangeEnd, overridesBySeries);
             _loadedRangeStartUtc = rangeStart;
             _loadedRangeEndUtc = rangeEnd;
-        }
-
-        /// <summary>
-        /// Buckets a flat override list by <c>SeriesEventId</c> so the
-        /// expander can do an O(1) lookup per series. Allocates one list
-        /// per series with overrides; series without overrides are
-        /// absent from the dictionary (the expander treats absence as
-        /// "no overrides").
-        /// </summary>
-        private static Dictionary<Guid, IReadOnlyList<EventOverride>> GroupOverridesBySeries(
-            List<EventOverride> overrides)
-        {
-            if (overrides.Count == 0)
-                return new Dictionary<Guid, IReadOnlyList<EventOverride>>();
-
-            var result = new Dictionary<Guid, List<EventOverride>>();
-            foreach (var ovr in overrides)
-            {
-                if (!result.TryGetValue(ovr.SeriesEventId, out var bucket))
-                {
-                    bucket = new List<EventOverride>();
-                    result[ovr.SeriesEventId] = bucket;
-                }
-                bucket.Add(ovr);
-            }
-
-            var typed = new Dictionary<Guid, IReadOnlyList<EventOverride>>(result.Count);
-            foreach (var (k, v) in result)
-                typed[k] = v;
-            return typed;
-        }
-
-        /// <summary>
-        /// Flattens repository rows into the projection that
-        /// <see cref="_eventsByDate"/> ultimately groups: standalone rows pass
-        /// through; recurring master rows are replaced by their expansions
-        /// over the load range, with any per-occurrence overrides for the
-        /// series merged in by the expander. Masters never enter the result
-        /// — only their expansions do. Expansion is bounded by the active
-        /// view's range (≤ 42 days), so the per-call cost is small even for
-        /// long-lived series; it runs once per range change, not on
-        /// visibility toggles.
-        /// </summary>
-        private static List<Event> ExpandRecurrences(
-            List<Event> rows,
-            DateTime rangeStartUtc,
-            DateTime rangeEndUtc,
-            IReadOnlyDictionary<Guid, IReadOnlyList<EventOverride>> overridesBySeries)
-        {
-            var result = new List<Event>(rows.Count);
-
-            foreach (var row in rows)
-            {
-                if (row.RecurrenceRule is null)
-                {
-                    result.Add(row);
-                    continue;
-                }
-
-                var seriesOverrides = overridesBySeries.GetValueOrDefault(row.Id);
-                foreach (var occurrence in
-                    RecurrenceExpander.Expand(row, rangeStartUtc, rangeEndUtc, seriesOverrides))
-                {
-                    result.Add(occurrence);
-                }
-            }
-
-            return result;
         }
 
         /// <summary>
@@ -968,14 +902,8 @@ namespace Chronicle
         /// </summary>
         private void ApplyVisibilityFilter()
         {
-            // If _calendarVisibility is empty (no calendars), everything passes through.
-            var visible = _projectedEvents
-                .Where(e => _calendarVisibility.Count == 0
-                            || _calendarVisibility.GetValueOrDefault(e.CalendarId, true));
-
-            _eventsByDate = visible
-                .GroupBy(e => DateHelpers.GetEventDayKey(e.StartTimeUtc))
-                .ToDictionary(g => g.Key, g => g.ToList());
+            _eventsByDate = EventProjection.GroupVisibleByDay(
+                _projectedEvents, _calendarVisibility);
         }
 
         /// <summary>

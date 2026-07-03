@@ -322,7 +322,13 @@ mutated. The seam makes those tests possible.
 
 ### Projection Helper Extraction
 
-`MainWindow` currently owns event loading, recurrence expansion, loaded-range
+**Done (2026-07-03):** landed as the internal
+`Chronicle.Projection.EventProjection` (`src/Chronicle.Core/Projection/`).
+`MainWindow` calls into it for override grouping, recurrence expansion,
+visibility filtering + day grouping, and the loaded-range coverage decision
+(`RangeCovered`). Covered by Layer 4 below.
+
+`MainWindow` previously owned event loading, recurrence expansion, loaded-range
 coverage, and visibility filtering. Some of that is pure calendar logic mixed
 with UI coordination.
 
@@ -362,8 +368,13 @@ provider — to leak its shape into UI code.
 
 ### Timeline Packing Extraction
 
-`TimelineRenderHelper` (in `src/Chronicle/Views/Rendering`) has overlap-packing
-logic that is currently private. If day/week layout regressions appear, extract
+**Done (2026-07-03):** the overlap-packing algorithm and its `PackedEvent`
+result moved to the internal `Chronicle.Layout.TimelinePacker`
+(`src/Chronicle.Core/Layout/`); `TimelineRenderHelper` keeps the
+`UIElement`-building and calls `TimelinePacker.Pack`. Covered by Layer 5 below.
+
+`TimelineRenderHelper` (in `src/Chronicle/Views/Rendering`) had overlap-packing
+logic that was private. If day/week layout regressions appear, extract
 the packing algorithm — pure geometry over start/end times, no WinUI — into an
 internal helper **in `Chronicle.Core`** and test it directly via the
 `ProjectReference`. Leave the `UIElement`-building in the renderer.
@@ -512,9 +523,9 @@ flowing into it.
 
 ### Layer 4: Projection And Cache Tests
 
-**Status (2026-07-03): not started** — blocked on extracting the projection
-helper from `MainWindow` into `Chronicle.Core` (see "Projection Helper
-Extraction" above). To land before Phase B.
+**Status (2026-07-03): done** — against `Chronicle.Projection.EventProjection`
+(the extracted helper) plus `DateHelpers` view ranges. All core cases below
+covered.
 
 Files after small extraction:
 
@@ -545,8 +556,10 @@ pipeline.
 
 ### Layer 5: Thin UI Logic Tests
 
-**Status (2026-07-03): not started** — awaits the same extraction as Layer 4,
-plus the picker / packing helpers being pulled out of their renderers.
+**Status (2026-07-03): timeline packing done** — the overlap-packing geometry
+is extracted to `Chronicle.Layout.TimelinePacker` and tested. The recurrence
+picker (in `EventEditPopover`) remains WinUI-entangled and is deferred until a
+regression or Phase-B need justifies extracting it.
 
 This layer should come after the local core is covered.
 
@@ -616,11 +629,11 @@ The third milestone should harden the app-level event pipeline.
 
 Work:
 
-- extract projection/filter/range-coverage helper logic from `MainWindow`
-- test recurrence expansion through that helper
-- test calendar visibility filtering
-- test cache coverage decisions
-- test Month/Week/Day range selection
+- ✓ extract projection/filter/range-coverage helper logic from `MainWindow`
+- ✓ test recurrence expansion through that helper
+- ✓ test calendar visibility filtering
+- ✓ test cache coverage decisions
+- ✓ test Month/Week/Day range selection
 
 This should land before Phase B of the Local Baseline (search / agenda / year
 view) begins, and well before Google integration. It prevents local navigation
