@@ -3,6 +3,7 @@ using System.Threading.Tasks;
 using Chronicle.Data.Repositories;
 using Chronicle.Models;
 using Chronicle.Models.Recurrence;
+using Microsoft.Data.Sqlite;
 using static Chronicle.Tests.Data.RepositoryTestData;
 
 namespace Chronicle.Tests.Data;
@@ -101,6 +102,16 @@ public sealed class EventRepositoryTests : InitializedDatabaseTest
     public async Task GetByIdAsync_MissingRow_ReturnsNull()
     {
         Assert.Null(await _events.GetByIdAsync(Guid.NewGuid()));
+    }
+
+    [Fact]
+    public async Task Insert_EventWithNonexistentCalendar_ViolatesForeignKey()
+    {
+        // foreign_keys = ON (set on every connection): Events.CalendarId →
+        // Calendars(Id) rejects an event whose calendar was never inserted.
+        var orphan = StandaloneEvent(Guid.NewGuid());
+
+        await Assert.ThrowsAsync<SqliteException>(() => _events.InsertAsync(orphan));
     }
 
     [Fact]
