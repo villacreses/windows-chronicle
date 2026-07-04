@@ -3,6 +3,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Chronicle.Data.Repositories;
 using Chronicle.Models.Recurrence;
+using Microsoft.Data.Sqlite;
 using static Chronicle.Tests.Data.RepositoryTestData;
 
 namespace Chronicle.Tests.Data;
@@ -178,5 +179,53 @@ public sealed class OverrideRepositoryTests : InitializedDatabaseTest
                 new EventRef.Occurrence(Guid.NewGuid(), unspecifiedAnchor),
                 new OverrideFields(Title: "x")));
         Assert.Contains("UTC", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Upsert_NonUtcStart_ThrowsAtRepositoryBoundary()
+    {
+        var nonUtcStart = new DateTime(2026, 6, 1, 10, 0, 0, DateTimeKind.Unspecified);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => _overrides.UpsertAsync(
+                new EventRef.Occurrence(Guid.NewGuid(), Utc(2026, 6, 1, 9, 0)),
+                new OverrideFields(StartTimeUtc: nonUtcStart)));
+        Assert.Contains("UTC", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Upsert_NonUtcEnd_ThrowsAtRepositoryBoundary()
+    {
+        var nonUtcEnd = new DateTime(2026, 6, 1, 11, 0, 0, DateTimeKind.Unspecified);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => _overrides.UpsertAsync(
+                new EventRef.Occurrence(Guid.NewGuid(), Utc(2026, 6, 1, 9, 0)),
+                new OverrideFields(EndTimeUtc: nonUtcEnd)));
+        Assert.Contains("UTC", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Upsert_EndBeforeStart_ThrowsAtRepositoryBoundary()
+    {
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => _overrides.UpsertAsync(
+                new EventRef.Occurrence(Guid.NewGuid(), Utc(2026, 6, 1, 9, 0)),
+                new OverrideFields(
+                    StartTimeUtc: Utc(2026, 6, 1, 11, 0),
+                    EndTimeUtc: Utc(2026, 6, 1, 10, 0))));
+        Assert.Contains("before", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Upsert_OrphanSeries_ViolatesForeignKey()
+    {
+        // Fields are valid, so the write reaches SQLite; with foreign_keys = ON,
+        // EventOverrides.SeriesEventId → Events(Id) rejects an override whose
+        // master row does not exist.
+        await Assert.ThrowsAsync<SqliteException>(
+            () => _overrides.UpsertAsync(
+                new EventRef.Occurrence(Guid.NewGuid(), Utc(2026, 6, 1, 9, 0)),
+                new OverrideFields(Title: "orphan")));
     }
 }

@@ -194,4 +194,43 @@ public class DateHelpersTests
         Assert.Equal(new DateTime(2026, 6, 4), afterEndLocal.Date);
         Assert.Equal(TimeSpan.Zero, afterEndLocal.TimeOfDay);
     }
+
+    // ── Local↔UTC conversions (previously only exercised indirectly) ──────
+
+    [Fact]
+    public void CombineLocalDateAndTimeAsUtc_TreatsInputAsLocalWallClock()
+    {
+        // The date's own time-of-day is dropped; `time` supplies the clock.
+        var date = new DateTime(2026, 6, 15, 9, 30, 0);
+        var time = new TimeSpan(14, 30, 0);
+
+        var result = DateHelpers.CombineLocalDateAndTimeAsUtc(date, time);
+
+        Assert.Equal(DateTimeKind.Utc, result.Kind);
+        // Round-trips back to 14:30 local on the given date, in any zone.
+        Assert.Equal(new DateTime(2026, 6, 15, 14, 30, 0), result.ToLocalTime());
+    }
+
+    [Fact]
+    public void GetMonthStartLocal_ReturnsFirstOfMonthAtLocalMidnight()
+    {
+        var start = DateHelpers.GetMonthStartLocal(new DateTime(2026, 6, 17, 8, 0, 0));
+
+        Assert.Equal(new DateTime(2026, 6, 1), start.Date);
+        Assert.Equal(TimeSpan.Zero, start.TimeOfDay);
+        Assert.Equal(DateTimeKind.Local, start.Kind);
+    }
+
+    [Fact]
+    public void GetEventDayKey_ConvertsUtcInstantToLocalDayKey()
+    {
+        var utc = new DateTime(2026, 6, 15, 18, 0, 0, DateTimeKind.Utc);
+
+        var key = DateHelpers.GetEventDayKey(utc);
+
+        // The key is the local calendar day of the instant, time stripped.
+        Assert.Equal(utc.ToLocalTime().Date, key.Date);
+        Assert.Equal(TimeSpan.Zero, key.TimeOfDay);
+        Assert.Equal(DateTimeKind.Local, key.Kind);
+    }
 }
