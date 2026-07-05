@@ -51,36 +51,14 @@ public static class EventEditPopover
     private static readonly SolidColorBrush DangerBrush   = new(Theme.Danger);
 
     /// <summary>
-    /// Phase 2B: derives an IANA timezone id for the recurrence anchor
-    /// frame of a newly-created recurring event. Called only on the
-    /// create path — edits preserve the master's existing TimeZoneId.
-    ///
-    /// "Always IANA" invariant at the write boundary: on Windows,
-    /// <c>TimeZoneInfo.Local.Id</c> surfaces a Windows id (e.g.
-    /// "Pacific Standard Time"), which we convert via
-    /// <c>TryConvertWindowsIdToIanaId</c>. On non-Windows the id is
-    /// already IANA and we verify it via <c>TryConvertIanaIdToWindowsId</c>
-    /// (reverse direction); both calls failing means the local zone is
-    /// neither form we can map, in which case we degrade to UTC and log
-    /// rather than silently persist an unmapped string. The escape
-    /// hatch cannot weaken the IANA invariant — only the user's
-    /// experience for that one zone.
+    /// Derives an IANA timezone id for the recurrence anchor frame of a
+    /// newly-created recurring event, from the system local zone. Called only
+    /// on the create path — edits preserve the master's existing TimeZoneId.
+    /// The Windows→IANA normalization and its UTC fallback live in
+    /// <see cref="RecurrenceTimeZone.NormalizeToIana"/>.
     /// </summary>
     private static string GetDefaultRecurringTimeZoneId()
-    {
-        var local = TimeZoneInfo.Local.Id;
-
-        if (TimeZoneInfo.TryConvertWindowsIdToIanaId(local, out var iana))
-            return iana;
-
-        if (TimeZoneInfo.TryConvertIanaIdToWindowsId(local, out _))
-            return local;
-
-        System.Diagnostics.Debug.WriteLine(
-            $"Local timezone '{local}' resolves to neither IANA nor "
-            + "Windows; falling back to UTC for new recurring events.");
-        return "UTC";
-    }
+        => RecurrenceTimeZone.NormalizeToIana(TimeZoneInfo.Local.Id);
 
     /// <summary>
     /// Shows the create-event popover anchored to <paramref name="anchorElement"/>.
@@ -621,9 +599,10 @@ public static class EventEditPopover
     }
 
     // ── Recurrence picker ─────────────────────────────────────────────────
-
-    private enum FrequencyChoice { None, Daily, Weekly, Monthly, Yearly }
-    private enum EndsChoice { Never, OnDate, AfterN }
+    //
+    // Frequency/ends choices, the picker-state record, and the rule ⇄ state
+    // mapping live in Chronicle.Models.Recurrence.RecurrencePickerModel; this
+    // section owns only the WinUI controls and their wiring.
 
     /// <summary>
     /// Bag of controls + a reader closure for the recurrence picker. The
@@ -702,17 +681,17 @@ public static class EventEditPopover
         // Visibility wiring
         void RefreshVisibility()
         {
-            var freq = (FrequencyChoice)freqCombo.SelectedIndex;
-            chipsRow.Visibility = freq == FrequencyChoice.Weekly
+            var freq = (RecurrenceFrequencyChoice)freqCombo.SelectedIndex;
+            chipsRow.Visibility = freq == RecurrenceFrequencyChoice.Weekly
                 ? Visibility.Visible : Visibility.Collapsed;
-            var repeats = freq != FrequencyChoice.None;
+            var repeats = freq != RecurrenceFrequencyChoice.None;
             endsLabel.Visibility = repeats ? Visibility.Visible : Visibility.Collapsed;
             endsCombo.Visibility = repeats ? Visibility.Visible : Visibility.Collapsed;
 
-            var ends = (EndsChoice)endsCombo.SelectedIndex;
-            untilDate.Visibility = repeats && ends == EndsChoice.OnDate
+            var ends = (RecurrenceEndChoice)endsCombo.SelectedIndex;
+            untilDate.Visibility = repeats && ends == RecurrenceEndChoice.OnDate
                 ? Visibility.Visible : Visibility.Collapsed;
-            countBox.Visibility = repeats && ends == EndsChoice.AfterN
+            countBox.Visibility = repeats && ends == RecurrenceEndChoice.AfterN
                 ? Visibility.Visible : Visibility.Collapsed;
         }
         freqCombo.SelectionChanged += (s, e) => RefreshVisibility();
@@ -761,53 +740,15 @@ public static class EventEditPopover
         DatePicker untilDate,
         TextBox countBox)
     {
-        if (rule is null)
-        {
-            freqCombo.SelectedIndex = (int)FrequencyChoice.None;
-            // Default weekly chip to start-day's weekday so toggling to
-            // Weekly produces a sensible rule immediately.
-            dayChips[(int)initialStartLocal.DayOfWeek].IsChecked = true;
-            endsCombo.SelectedIndex = (int)EndsChoice.Never;
-            return;
-        }
+        var state = RecurrencePickerModel.SeedState(rule, initialStartLocal);
 
-        freqCombo.SelectedIndex = rule.Frequency switch
-        {
-            RecurrenceFrequency.Daily   => (int)FrequencyChoice.Daily,
-            RecurrenceFrequency.Weekly  => (int)FrequencyChoice.Weekly,
-            RecurrenceFrequency.Monthly => (int)FrequencyChoice.Monthly,
-            RecurrenceFrequency.Yearly  => (int)FrequencyChoice.Yearly,
-            _ => (int)FrequencyChoice.None,
-        };
-
-        if (rule.ByDay != WeekdaySet.None)
-        {
-            for (int i = 0; i < 7; i++)
-            {
-                var dow = (DayOfWeek)i;
-                dayChips[i].IsChecked =
-                    (rule.ByDay & RecurrenceRule.FromDayOfWeek(dow)) != 0;
-            }
-        }
-        else
-        {
-            dayChips[(int)initialStartLocal.DayOfWeek].IsChecked = true;
-        }
-
-        if (rule.UntilUtc is DateTime until)
-        {
-            endsCombo.SelectedIndex = (int)EndsChoice.OnDate;
-            untilDate.Date = new DateTimeOffset(until.ToLocalTime());
-        }
-        else if (rule.Count is int count)
-        {
-            endsCombo.SelectedIndex = (int)EndsChoice.AfterN;
-            countBox.Text = count.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        }
-        else
-        {
-            endsCombo.SelectedIndex = (int)EndsChoice.Never;
-        }
+        freqCombo.SelectedIndex = (int)state.Frequency;
+        for (int i = 0; i < 7; i++)
+            dayChips[i].IsChecked =
+                (state.WeeklyDays & RecurrenceRule.FromDayOfWeek((DayOfWeek)i)) != 0;
+        endsCombo.SelectedIndex = (int)state.End;
+        untilDate.Date = new DateTimeOffset(state.UntilLocalDate);
+        countBox.Text = state.CountText;
     }
 
     private static (RecurrenceRule? rule, string? error, bool ok) ReadPicker(
@@ -819,74 +760,24 @@ public static class EventEditPopover
         DateTime startUtc,
         DateTime endUtc)
     {
-        var freq = (FrequencyChoice)freqCombo.SelectedIndex;
-        if (freq == FrequencyChoice.None)
-            return (null, null, true);
-
-        RecurrenceRule rule;
-        switch (freq)
+        var days = WeekdaySet.None;
+        for (int i = 0; i < 7; i++)
         {
-            case FrequencyChoice.Daily:
-                rule = RecurrenceRule.Daily();
-                break;
-
-            case FrequencyChoice.Weekly:
-                var days = WeekdaySet.None;
-                for (int i = 0; i < 7; i++)
-                {
-                    if (dayChips[i].IsChecked == true)
-                        days |= RecurrenceRule.FromDayOfWeek((DayOfWeek)i);
-                }
-                if (days == WeekdaySet.None)
-                    return (null, "Pick at least one day of the week.", false);
-                rule = RecurrenceRule.Weekly(days);
-                break;
-
-            case FrequencyChoice.Monthly:
-                rule = RecurrenceRule.Monthly(byMonthDay: startUtc.ToLocalTime().Day);
-                break;
-
-            case FrequencyChoice.Yearly:
-                rule = RecurrenceRule.Yearly();
-                break;
-
-            default:
-                return (null, "Unsupported repeat option.", false);
+            if (dayChips[i].IsChecked == true)
+                days |= RecurrenceRule.FromDayOfWeek((DayOfWeek)i);
         }
 
-        var ends = (EndsChoice)endsCombo.SelectedIndex;
-        switch (ends)
-        {
-            case EndsChoice.Never:
-                break;
+        var state = new RecurrencePickerState(
+            (RecurrenceFrequencyChoice)freqCombo.SelectedIndex,
+            days,
+            (RecurrenceEndChoice)endsCombo.SelectedIndex,
+            untilDate.Date.Date,
+            countBox.Text);
 
-            case EndsChoice.OnDate:
-                var until = DateHelpers.CombineLocalDateAndTimeAsUtc(
-                    untilDate.Date.Date, TimeSpan.Zero).AddDays(1).AddTicks(-1);
-                if (until < startUtc)
-                    return (null, "End date must be on or after the start date.", false);
-                rule = rule.WithUntil(until);
-                break;
-
-            case EndsChoice.AfterN:
-                if (!int.TryParse(
-                        countBox.Text,
-                        System.Globalization.NumberStyles.Integer,
-                        System.Globalization.CultureInfo.InvariantCulture,
-                        out var count)
-                    || count < 1)
-                {
-                    return (null, "Occurrence count must be a positive integer.", false);
-                }
-                rule = rule.WithCount(count);
-                break;
-        }
-
-        // EndUtcCached now depends on TimeZoneId — the picker doesn't know
-        // it (only buildEvent does). Return the rule; the caller computes
-        // the cached end via RecurrenceExpander.ComputeEndUtc with the
-        // appropriate tz inside buildEvent.
-        return (rule, null, true);
+        // EndUtcCached depends on TimeZoneId, which only buildEvent knows, so
+        // the picker returns just the rule; the caller computes the cached end
+        // via RecurrenceExpander.ComputeEndUtc with the appropriate tz.
+        return RecurrencePickerModel.BuildRule(state, startUtc);
     }
 
     // ── Form building helpers ─────────────────────────────────────────────
