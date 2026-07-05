@@ -556,17 +556,21 @@ pipeline.
 
 ### Layer 5: Thin UI Logic Tests
 
-**Status (2026-07-03): timeline packing done** — the overlap-packing geometry
-is extracted to `Chronicle.Layout.TimelinePacker` and tested. The recurrence
-picker (in `EventEditPopover`) remains WinUI-entangled and is deferred until a
-regression or Phase-B need justifies extracting it.
+**Status (2026-07-05): done** — both extractable targets landed. The
+overlap-packing geometry is in `Chronicle.Layout.TimelinePacker`; the
+recurrence-picker rule construction / seed mapping is in
+`Chronicle.Models.Recurrence.RecurrencePickerModel` and the Windows→IANA
+write-boundary normalization in `RecurrenceTimeZone`. All are extracted from
+their WinUI hosts (`TimelineRenderHelper`, `EventEditPopover`) and tested
+directly. The only remaining candidate — selected-day event sorting — waits
+on an explicit ordering contract.
 
 This layer should come after the local core is covered.
 
 Possible targets:
 
-- recurrence picker rule construction, if extracted from `EventEditPopover`
-- timeline overlap packing, if extracted from `TimelineRenderHelper`
+- ✓ recurrence picker rule construction, extracted from `EventEditPopover`
+- ✓ timeline overlap packing, extracted from `TimelineRenderHelper`
 - selected-day event sorting, if the ordering contract becomes explicit
 
 Avoid in the first wave:
