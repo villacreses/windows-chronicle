@@ -126,6 +126,89 @@ internal static class EventProjection
             .ToList();
 
     /// <summary>
+    /// Runs the search side of the projection pipeline: takes the candidate
+    /// rows returned by <c>EventRepository.SearchCandidatesAsync</c>,
+    /// expands recurring masters over the load range, and re-checks each
+    /// merged occurrence's Title / Description against the query — because
+    /// an override can flip either field either direction, and the SQL
+    /// candidate step matches on stored strings, not merged ones.
+    ///
+    /// Standalone rows are kept iff their Title or Description contains
+    /// the query. Recurring masters are expanded via
+    /// <see cref="RecurrenceExpander.Expand"/> using
+    /// <paramref name="overridesBySeries"/>; each occurrence is retained
+    /// iff its merged Title or Description matches. The result is a flat
+    /// list of standalone events plus expanded occurrences, ordered by
+    /// <c>StartTimeUtc</c> for a chronological results panel.
+    ///
+    /// <para>Match is ordinal case-insensitive — close to the SQL layer's
+    /// ASCII <c>LIKE</c> behavior, and slightly more forgiving for
+    /// Unicode case (safely additive, never subtractive of SQL hits that
+    /// already passed).</para>
+    ///
+    /// <para>Deliberately does not take a calendar visibility map. The
+    /// load pipeline honors visibility because the grid is a
+    /// chronological picture; search is intent-driven — the query is the
+    /// filter. Hidden calendars are still searchable.</para>
+    ///
+    /// <para>Empty / whitespace <paramref name="query"/> returns an empty
+    /// list, matching the repository's behavior.</para>
+    /// </summary>
+    public static List<Event> SearchOccurrences(
+        IReadOnlyList<Event> candidateRows,
+        IReadOnlyDictionary<Guid, IReadOnlyList<EventOverride>> overridesBySeries,
+        string query,
+        DateTime rangeStartUtc,
+        DateTime rangeEndUtc)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+            return new List<Event>();
+
+        var results = new List<Event>();
+
+        foreach (var row in candidateRows)
+        {
+            if (row.RecurrenceRule is null)
+            {
+                if (Matches(row, query))
+                    results.Add(row);
+                continue;
+            }
+
+            var seriesOverrides = overridesBySeries.GetValueOrDefault(row.Id);
+            foreach (var occurrence in
+                RecurrenceExpander.Expand(row, rangeStartUtc, rangeEndUtc, seriesOverrides))
+            {
+                if (Matches(occurrence, query))
+                    results.Add(occurrence);
+            }
+        }
+
+        results.Sort(CompareByStartThenTitle);
+        return results;
+    }
+
+    private static bool Matches(Event e, string query)
+    {
+        if (e.Title is string title
+            && title.Contains(query, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (e.Description is string description
+            && description.Contains(query, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return false;
+    }
+
+    private static int CompareByStartThenTitle(Event a, Event b)
+    {
+        var byStart = a.StartTimeUtc.CompareTo(b.StartTimeUtc);
+        if (byStart != 0) return byStart;
+        return string.Compare(a.Title, b.Title, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// True when the cached (loaded) UTC range already covers the requested UTC
     /// range, so the load pipeline can skip the DB query. View switches that
     /// stay inside the loaded range (Month → Week → Day in place) short-circuit

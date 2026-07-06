@@ -307,6 +307,152 @@ public sealed class EventProjectionTests
         Assert.Equal(new[] { apple, zebra }, ordered);
     }
 
+    // ── SearchOccurrences ─────────────────────────────────────────────────
+
+    [Fact]
+    public void SearchOccurrences_EmptyQuery_ReturnsEmpty()
+    {
+        var calendarId = NewCalendar().Id;
+        var e = StandaloneEvent(calendarId, title: "Anything");
+
+        Assert.Empty(EventProjection.SearchOccurrences(
+            new[] { e }, NoOverrides, "", Utc(2026, 6, 1), Utc(2026, 6, 30)));
+        Assert.Empty(EventProjection.SearchOccurrences(
+            new[] { e }, NoOverrides, "   ", Utc(2026, 6, 1), Utc(2026, 6, 30)));
+    }
+
+    [Fact]
+    public void SearchOccurrences_Standalones_TitleOrDescriptionMatch_Others_Excluded()
+    {
+        var calendarId = NewCalendar().Id;
+        var titleHit = StandaloneEvent(
+            calendarId, startUtc: Utc(2026, 6, 5, 9, 0), title: "Standup");
+        var descHit = StandaloneEvent(
+            calendarId, startUtc: Utc(2026, 6, 6, 9, 0),
+            title: "Sync", description: "Weekly team STANDUP notes");
+        var miss = StandaloneEvent(
+            calendarId, startUtc: Utc(2026, 6, 7, 9, 0), title: "Lunch");
+
+        var result = EventProjection.SearchOccurrences(
+            new[] { titleHit, descHit, miss }, NoOverrides,
+            "standup", Utc(2026, 6, 1), Utc(2026, 6, 30));
+
+        Assert.Equal(new[] { titleHit, descHit }, result);
+    }
+
+    [Fact]
+    public void SearchOccurrences_RecurringMaster_MasterTitleMatches_AllOccurrencesReturned()
+    {
+        var calendarId = NewCalendar().Id;
+        var master = RecurringMaster(
+            calendarId, rrule: "FREQ=WEEKLY", startUtc: Utc(2026, 6, 1, 9, 0),
+            title: "Standup");
+
+        var result = EventProjection.SearchOccurrences(
+            new[] { master }, NoOverrides,
+            "standup", Utc(2026, 6, 1), Utc(2026, 6, 21, 23, 59));
+
+        Assert.Equal(3, result.Count);
+        Assert.All(result, e => Assert.True(e.IsOccurrence));
+        Assert.All(result, e => Assert.Equal("Standup", e.Title));
+    }
+
+    [Fact]
+    public void SearchOccurrences_OverrideRenamesToMatch_OnlyThatOccurrenceReturned()
+    {
+        // The classic "override-only match" case: master title doesn't hit,
+        // but occurrence #2 was renamed via override. Only that occurrence
+        // should surface.
+        var calendarId = NewCalendar().Id;
+        var master = RecurringMaster(
+            calendarId, rrule: "FREQ=WEEKLY", startUtc: Utc(2026, 6, 1, 9, 0),
+            title: "Sync");
+
+        var grouped = EventProjection.GroupOverridesBySeries(new List<EventOverride>
+        {
+            Override(master.Id, Utc(2026, 6, 8, 9, 0), title: "Lunch meeting"),
+        });
+
+        var result = EventProjection.SearchOccurrences(
+            new[] { master }, grouped,
+            "lunch", Utc(2026, 6, 1), Utc(2026, 6, 21, 23, 59));
+
+        var only = Assert.Single(result);
+        Assert.Equal(Utc(2026, 6, 8, 9, 0), only.SeriesAnchorUtc);
+        Assert.Equal("Lunch meeting", only.Title);
+    }
+
+    [Fact]
+    public void SearchOccurrences_OverrideRenamesAwayFromMatch_ThatOccurrenceExcluded()
+    {
+        // The reverse "divergence" case: master title matches, so every
+        // occurrence inherits and matches — except the one an override
+        // renamed away. That single occurrence must be excluded even
+        // though the SQL candidate step returned the master.
+        var calendarId = NewCalendar().Id;
+        var master = RecurringMaster(
+            calendarId, rrule: "FREQ=WEEKLY", startUtc: Utc(2026, 6, 1, 9, 0),
+            title: "Standup");
+
+        var grouped = EventProjection.GroupOverridesBySeries(new List<EventOverride>
+        {
+            Override(master.Id, Utc(2026, 6, 8, 9, 0), title: "Solo coding time"),
+        });
+
+        var result = EventProjection.SearchOccurrences(
+            new[] { master }, grouped,
+            "standup", Utc(2026, 6, 1), Utc(2026, 6, 21, 23, 59));
+
+        Assert.Equal(
+            new[] { Utc(2026, 6, 1, 9, 0), Utc(2026, 6, 15, 9, 0) },
+            result.Select(e => e.SeriesAnchorUtc!.Value));
+        Assert.DoesNotContain(result, e => e.SeriesAnchorUtc == Utc(2026, 6, 8, 9, 0));
+    }
+
+    [Fact]
+    public void SearchOccurrences_CaseInsensitiveMatch_OnBothFields()
+    {
+        var calendarId = NewCalendar().Id;
+        var mixedCaseTitle = StandaloneEvent(
+            calendarId, startUtc: Utc(2026, 6, 5, 9, 0), title: "PROJECT Kickoff");
+        var mixedCaseDesc = StandaloneEvent(
+            calendarId, startUtc: Utc(2026, 6, 6, 9, 0),
+            title: "Sync", description: "notes on the PROJECT");
+
+        var result = EventProjection.SearchOccurrences(
+            new[] { mixedCaseTitle, mixedCaseDesc }, NoOverrides,
+            "project", Utc(2026, 6, 1), Utc(2026, 6, 30));
+
+        Assert.Equal(new[] { mixedCaseTitle, mixedCaseDesc }, result);
+    }
+
+    [Fact]
+    public void SearchOccurrences_OrdersResultsChronologicallyByStart_AcrossMastersAndStandalones()
+    {
+        var calendarId = NewCalendar().Id;
+        var laterStandalone = StandaloneEvent(
+            calendarId, startUtc: Utc(2026, 6, 20, 9, 0), title: "Standup review");
+        var master = RecurringMaster(
+            calendarId, rrule: "FREQ=WEEKLY", startUtc: Utc(2026, 6, 1, 9, 0),
+            title: "Standup");
+
+        var result = EventProjection.SearchOccurrences(
+            // Deliberately pass in reverse order: results must still come out
+            // sorted by StartTimeUtc regardless of input order.
+            new[] { laterStandalone, master }, NoOverrides,
+            "standup", Utc(2026, 6, 1), Utc(2026, 6, 20, 23, 59));
+
+        Assert.Equal(
+            new[]
+            {
+                Utc(2026, 6, 1, 9, 0),
+                Utc(2026, 6, 8, 9, 0),
+                Utc(2026, 6, 15, 9, 0),
+                Utc(2026, 6, 20, 9, 0),
+            },
+            result.Select(e => e.StartTimeUtc));
+    }
+
     [Fact]
     public void GroupVisibleByDay_OrdersEachDay_ViaOrderForDay()
     {
