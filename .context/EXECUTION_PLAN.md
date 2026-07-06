@@ -28,15 +28,15 @@ anything is built on top of it.
 - Recurrence Phase 2B (wall-clock anchoring via `TimeZoneId`)
 - Test infrastructure: `Chronicle.Core` extraction + `src/`-`tests/`
   layout + xUnit project (see `TESTING.md` / DECISIONS.md "Domain
-  Extracted to Chronicle.Core"). Layers 1–5 landed (~190 tests): pure
+  Extracted to Chronicle.Core"). Layers 1–5 landed (~194 tests): pure
   domain, recurrence invariants + DST, SQLite repositories, projection +
-  cache (`EventProjection`), timeline packing (`TimelinePacker`), and the
+  cache (`EventProjection`, incl. the explicit per-day ordering contract
+  `OrderForDay`), timeline packing (`TimelinePacker`), and the
   recurrence-picker rule construction (`RecurrencePickerModel` /
   `RecurrenceTimeZone`) — the app-layer pieces after extracting those pure
   helpers out of `MainWindow` / `TimelineRenderHelper` / `EventEditPopover`
   into `Chronicle.Core`. Plus a coverage-gap pass and an event-pipeline
-  integration test. Layer 5's selected-day sorting target stays open pending
-  an explicit ordering contract.
+  integration test. All Layer 5 targets are now covered.
 
 ### UI CONSTRAINT (TEMPORARY)
 

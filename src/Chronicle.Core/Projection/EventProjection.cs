@@ -90,8 +90,9 @@ internal static class EventProjection
 
     /// <summary>
     /// Filters the projected events through calendar visibility, then groups
-    /// the survivors by local day key for render lookup. Pure — no DB. An empty
-    /// visibility map treats every calendar as visible (the no-calendars and
+    /// the survivors by local day key for render lookup, each day's list
+    /// ordered by <see cref="OrderForDay"/>. Pure — no DB. An empty visibility
+    /// map treats every calendar as visible (the no-calendars and
     /// not-yet-reconciled cases). Does not mutate the source list.
     /// </summary>
     public static Dictionary<DateTime, List<Event>> GroupVisibleByDay(
@@ -104,8 +105,25 @@ internal static class EventProjection
 
         return visible
             .GroupBy(e => DateHelpers.GetEventDayKey(e.StartTimeUtc))
-            .ToDictionary(g => g.Key, g => g.ToList());
+            .ToDictionary(g => g.Key, g => OrderForDay(g));
     }
+
+    /// <summary>
+    /// Orders a single day's events for display: all-day events first (the
+    /// convention the day/week all-day bands and the selected-day panel share),
+    /// then timed events by start instant. Ties within each group break by
+    /// title (case-insensitive) so the order is deterministic and stable across
+    /// reloads. Because <c>_eventsByDate</c> is a render cache, not an identity
+    /// source, a stable render order must be computed here rather than relied
+    /// upon from repository query order (which sorts by each series' master
+    /// start, not by occurrence time).
+    /// </summary>
+    public static List<Event> OrderForDay(IEnumerable<Event> events)
+        => events
+            .OrderBy(e => e.IsAllDay ? 0 : 1)
+            .ThenBy(e => e.IsAllDay ? DateTime.MinValue : e.StartTimeUtc)
+            .ThenBy(e => e.Title, StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
     /// <summary>
     /// True when the cached (loaded) UTC range already covers the requested UTC
