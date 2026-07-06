@@ -81,6 +81,20 @@
                         Margin="4,0,0,0"/>
                 </StackPanel>
 
+                <!-- Search box (middle, right-aligned against the view switcher).
+                     QuerySubmitted (Enter or query-icon click) runs the search;
+                     no incremental / debounced typing to keep the write-path
+                     shape simple and predictable. -->
+                <AutoSuggestBox
+                    x:Name="SearchBox"
+                    Grid.Column="1"
+                    Width="280"
+                    HorizontalAlignment="Right"
+                    Margin="0,0,16,0"
+                    VerticalAlignment="Center"
+                    QueryIcon="Find"
+                    PlaceholderText="Search events"/>
+
                 <!-- View Switcher (Right): segmented Month / Week -->
                 <Border Grid.Column="2" VerticalAlignment="Center"
                         Background="#2A2B2F" CornerRadius="7" Padding="3"

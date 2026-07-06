@@ -38,6 +38,22 @@ namespace Chronicle
         private readonly EventPopover _eventPopover;
         private readonly Flyout _eventPopoverFlyout;
 
+        // Search results renderer + its flyout host. Kept as fields so the
+        // panel and flyout live for the window's lifetime (constructed once,
+        // content swapped per query). The flyout is anchored to SearchBox
+        // when shown.
+        private readonly StackPanel _searchResultsPanel;
+        private readonly Flyout _searchResultsFlyout;
+        private readonly SearchResultsRenderer _searchResultsRenderer;
+
+        // Search range: -1 year to +5 years around today. Standalones outside
+        // this window are excluded (LIKE is cheap but historical/far-future
+        // hits are noise for a calendar). Recurring expansion is likewise
+        // bounded here. If a user reports missing an event outside this
+        // window, revisit — the range is a UI default, not a hard invariant.
+        private static readonly TimeSpan SearchPastWindow = TimeSpan.FromDays(365);
+        private static readonly TimeSpan SearchFutureWindow = TimeSpan.FromDays(365 * 5);
+
         // Navigation state — single source of truth.
         //   _displayMonth: first day of the month currently shown by both grids.
         //   _selectedDate: the user's focused day (defaults to today). Kept
@@ -107,6 +123,25 @@ namespace Chronicle
             _eventPopover.DeleteRequested += EventPopover_DeleteRequested;
             _eventPopover.CloseRequested += (s, e) => _eventPopoverFlyout.Hide();
 
+            _searchResultsPanel = new StackPanel
+            {
+                Orientation = Orientation.Vertical,
+                Spacing = 2,
+                Width = 340
+            };
+            _searchResultsFlyout = new Flyout
+            {
+                Content = new ScrollViewer
+                {
+                    Content = _searchResultsPanel,
+                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                    MaxHeight = 420
+                },
+                Placement = FlyoutPlacementMode.Bottom
+            };
+            _searchResultsRenderer = new SearchResultsRenderer(
+                _searchResultsPanel, OnSearchResultActivated);
+
             PrevMonthButton.Click += PrevMonthButton_Click;
             NextMonthButton.Click += NextMonthButton_Click;
             TodayButton.Click += TodayButton_Click;
@@ -114,6 +149,8 @@ namespace Chronicle
             MonthViewToggle.Click += (s, e) => SwitchView(CalendarView.Month);
             WeekViewToggle.Click += (s, e) => SwitchView(CalendarView.Week);
             DayViewToggle.Click += (s, e) => SwitchView(CalendarView.Day);
+
+            SearchBox.QuerySubmitted += SearchBox_QuerySubmitted;
 
             DispatcherQueue.TryEnqueue(async () => await InitializeCalendarAsync());
         }
@@ -916,6 +953,84 @@ namespace Chronicle
         {
             _loadedRangeStartUtc = DateTime.MaxValue;
             _loadedRangeEndUtc = DateTime.MinValue;
+        }
+
+        // ── Search ────────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Query-submitted (Enter or search-icon click) on the header
+        /// search box. Runs the two-layer search pipeline:
+        /// <see cref="EventRepository.SearchCandidatesAsync"/> for candidate
+        /// rows, then <see cref="EventProjection.SearchOccurrences"/> to
+        /// expand recurring masters and re-filter merged occurrences. Shows
+        /// the results flyout anchored to the search box.
+        ///
+        /// Empty query hides the flyout — a submitted empty query is a
+        /// "cancel search" gesture.
+        /// </summary>
+        private async void SearchBox_QuerySubmitted(
+            AutoSuggestBox sender, AutoSuggestBoxQuerySubmittedEventArgs args)
+        {
+            var query = (args.QueryText ?? string.Empty).Trim();
+            if (query.Length == 0)
+            {
+                _searchResultsFlyout.Hide();
+                return;
+            }
+
+            try
+            {
+                var nowUtc = DateTime.UtcNow;
+                var rangeStart = nowUtc - SearchPastWindow;
+                var rangeEnd = nowUtc + SearchFutureWindow;
+
+                var candidates = await _eventRepository.SearchCandidatesAsync(
+                    query, rangeStart, rangeEnd);
+
+                var recurringMasterIds = candidates
+                    .Where(e => e.RecurrenceRule is not null)
+                    .Select(e => e.Id)
+                    .ToList();
+
+                var overrides = recurringMasterIds.Count == 0
+                    ? new List<EventOverride>()
+                    : await _overrideRepository.GetForSeriesAsync(recurringMasterIds);
+                var overridesBySeries = EventProjection.GroupOverridesBySeries(overrides);
+
+                var results = EventProjection.SearchOccurrences(
+                    candidates, overridesBySeries, query, rangeStart, rangeEnd);
+
+                _searchResultsRenderer.Render(results, _allCalendars);
+                _searchResultsFlyout.ShowAt(SearchBox);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"Search failed: {ex.Message}\n{ex.StackTrace}");
+            }
+        }
+
+        /// <summary>
+        /// A search result was clicked. Navigate the calendar to the
+        /// event's day in Day View so the user sees it in context, then
+        /// open the edit popover (matching the selected-day panel's
+        /// activation gesture). The popover is anchored to the fallback
+        /// anchor because the row that fired this callback is inside the
+        /// dismissed search flyout and no longer visible.
+        /// </summary>
+        private async void OnSearchResultActivated(Event evt, FrameworkElement anchor)
+        {
+            _searchResultsFlyout.Hide();
+
+            var eventDay = DateHelpers.GetEventDayKey(evt.StartTimeUtc);
+            _selectedDate = eventDay;
+            _displayMonth = DateHelpers.GetMonthStartLocal(eventDay);
+            SwitchView(CalendarView.Day);
+            // SwitchView triggers RefreshActiveViewAsync; await one dispatcher
+            // turn so the popover opens against a laid-out day.
+            await Task.Yield();
+
+            await EditEventAsync(evt, FallbackAnchor);
         }
 
         // ── Calendar grid rendering ───────────────────────────────────────────
