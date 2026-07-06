@@ -79,11 +79,13 @@ public static class EventEditPopover
             initialTitle: "",
             initialStartLocal: suggestedStartTime,
             initialEndLocal: suggestedStartTime.AddHours(1),
+            initialIsAllDay: false,
+            initialDescription: null,
             calendars: availableCalendars,
             selectedCalendarId: availableCalendars.Count > 0 ? availableCalendars[0].Id : null,
             initialRecurrence: null,
             showRecurringBanner: false,
-            buildEvent: (title, calendarId, startUtc, endUtc, recurrence) =>
+            buildEvent: (title, calendarId, startUtc, endUtc, isAllDay, description, recurrence) =>
             {
                 var nowUtc = DateTime.UtcNow;
                 // Phase 2B: TimeZoneId is resolved here (where we know
@@ -104,8 +106,8 @@ public static class EventEditPopover
                     Title = title,
                     StartTimeUtc = startUtc,
                     EndTimeUtc = endUtc,
-                    Description = null,
-                    IsAllDay = false,
+                    Description = description,
+                    IsAllDay = isAllDay,
                     RecurrenceRule = recurrence?.ToRruleString(),
                     RecurrenceExDatesUtc = Array.Empty<DateTime>(),
                     RecurrenceEndUtcCached = cachedEnd,
@@ -151,11 +153,13 @@ public static class EventEditPopover
             initialTitle: eventToEdit.Title,
             initialStartLocal: eventToEdit.StartTimeUtc.ToLocalTime(),
             initialEndLocal: eventToEdit.EndTimeUtc.ToLocalTime(),
+            initialIsAllDay: eventToEdit.IsAllDay,
+            initialDescription: eventToEdit.Description,
             calendars: availableCalendars,
             selectedCalendarId: eventToEdit.CalendarId,
             initialRecurrence: initialRecurrence,
             showRecurringBanner: initialRecurrence is not null,
-            buildEvent: (title, calendarId, startUtc, endUtc, recurrence) =>
+            buildEvent: (title, calendarId, startUtc, endUtc, isAllDay, description, recurrence) =>
             {
                 // Phase 2B TimeZoneId policy:
                 //   - no recurrence on save → null (non-recurring).
@@ -187,8 +191,8 @@ public static class EventEditPopover
                 Title = title,
                 StartTimeUtc = startUtc,
                 EndTimeUtc = endUtc,
-                Description = eventToEdit.Description,
-                IsAllDay = eventToEdit.IsAllDay,
+                Description = description,
+                IsAllDay = isAllDay,
                 RecurrenceRule = recurrence?.ToRruleString(),
                 // Preserve EXDATEs when the series remains recurring; clear
                 // them if the user removed recurrence entirely (the projection
@@ -261,6 +265,16 @@ public static class EventEditPopover
         root.Children.Add(MakeLabel("Name"));
         root.Children.Add(nameBox);
 
+        // All-day toggle
+        var allDayToggle = new ToggleSwitch
+        {
+            IsOn = occurrence.IsAllDay,
+            OnContent = "All day",
+            OffContent = "All day",
+            HorizontalAlignment = HorizontalAlignment.Left
+        };
+        root.Children.Add(allDayToggle);
+
         // Start
         var initialStartLocal = occurrence.StartTimeUtc.ToLocalTime();
         var initialEndLocal = occurrence.EndTimeUtc.ToLocalTime();
@@ -275,6 +289,27 @@ public static class EventEditPopover
         var endTime = new TimePicker { Time = initialEndLocal.TimeOfDay };
         root.Children.Add(MakeLabel("End"));
         root.Children.Add(MakeDateTimeRow(endDate, endTime));
+
+        void ApplyAllDayVisibility()
+        {
+            var allDay = allDayToggle.IsOn;
+            startTime.IsEnabled = !allDay;
+            endTime.IsEnabled = !allDay;
+        }
+        allDayToggle.Toggled += (s, e) => ApplyAllDayVisibility();
+        ApplyAllDayVisibility();
+
+        // Notes (multi-line description)
+        var notesBox = new TextBox
+        {
+            PlaceholderText = "Notes",
+            Text = occurrence.Description ?? string.Empty,
+            AcceptsReturn = true,
+            TextWrapping = TextWrapping.Wrap,
+            MinHeight = 64
+        };
+        root.Children.Add(MakeLabel("Notes"));
+        root.Children.Add(notesBox);
 
         var errorBlock = new TextBlock
         {
@@ -317,24 +352,49 @@ public static class EventEditPopover
                 return;
             }
 
-            var startUtc = DateHelpers.CombineLocalDateAndTimeAsUtc(
-                startDate.Date.Date, startTime.Time);
-            var endUtc = DateHelpers.CombineLocalDateAndTimeAsUtc(
-                endDate.Date.Date, endTime.Time);
+            var isAllDay = allDayToggle.IsOn;
 
-            if (startUtc >= endUtc)
+            DateTime startUtc;
+            DateTime endUtc;
+            if (isAllDay)
             {
-                Fail(errorBlock, "End time must be after start time.");
-                return;
+                // Phase A constraint: all-day is single-day. See the
+                // matching comment in ShowAsync / TryBuildEvent.
+                if (endDate.Date.Date != startDate.Date.Date)
+                {
+                    Fail(errorBlock, "All-day events must start and end on the same day.");
+                    return;
+                }
+
+                startUtc = DateHelpers.CombineLocalDateAndTimeAsUtc(
+                    startDate.Date.Date, TimeSpan.Zero);
+                endUtc = DateHelpers.CombineLocalDateAndTimeAsUtc(
+                    startDate.Date.Date.AddDays(1), TimeSpan.Zero);
             }
+            else
+            {
+                startUtc = DateHelpers.CombineLocalDateAndTimeAsUtc(
+                    startDate.Date.Date, startTime.Time);
+                endUtc = DateHelpers.CombineLocalDateAndTimeAsUtc(
+                    endDate.Date.Date, endTime.Time);
+
+                if (startUtc >= endUtc)
+                {
+                    Fail(errorBlock, "End time must be after start time.");
+                    return;
+                }
+            }
+
+            var description = notesBox.Text?.Trim();
+            if (string.IsNullOrEmpty(description))
+                description = null;
 
             // The returned Event carries the edited values plus
             // SeriesAnchorUtc + Id so the caller can route the write
             // (Id = master id by the identity contract; SeriesAnchorUtc =
-            // the anchor of this occurrence). Calendar / Description /
-            // IsAllDay / recurrence fields are unchanged from the source
-            // occurrence — the caller will discard the ones the override
-            // doesn't carry and treat the rest as inherit-from-master.
+            // the anchor of this occurrence). Description / IsAllDay are
+            // now editable and flow into OverrideFields at the caller;
+            // Calendar and recurrence fields remain series-level.
             var result = new Event
             {
                 Id = occurrence.Id,
@@ -342,8 +402,8 @@ public static class EventEditPopover
                 Title = title,
                 StartTimeUtc = startUtc,
                 EndTimeUtc = endUtc,
-                Description = occurrence.Description,
-                IsAllDay = occurrence.IsAllDay,
+                Description = description,
+                IsAllDay = isAllDay,
                 RecurrenceRule = null,
                 RecurrenceExDatesUtc = Array.Empty<DateTime>(),
                 RecurrenceEndUtcCached = null,
@@ -391,11 +451,13 @@ public static class EventEditPopover
         string initialTitle,
         DateTime initialStartLocal,
         DateTime initialEndLocal,
+        bool initialIsAllDay,
+        string? initialDescription,
         IList<Calendar> calendars,
         Guid? selectedCalendarId,
         RecurrenceRule? initialRecurrence,
         bool showRecurringBanner,
-        Func<string, Guid, DateTime, DateTime, RecurrenceRule?, Event> buildEvent)
+        Func<string, Guid, DateTime, DateTime, bool, string?, RecurrenceRule?, Event> buildEvent)
     {
         var tcs = new TaskCompletionSource<Event?>();
 
@@ -447,6 +509,16 @@ public static class EventEditPopover
         root.Children.Add(MakeLabel("Calendar"));
         root.Children.Add(calendarCombo);
 
+        // All-day toggle
+        var allDayToggle = new ToggleSwitch
+        {
+            IsOn = initialIsAllDay,
+            OnContent = "All day",
+            OffContent = "All day",
+            HorizontalAlignment = HorizontalAlignment.Left
+        };
+        root.Children.Add(allDayToggle);
+
         // Start date + time
         var startDate = new DatePicker { Date = new DateTimeOffset(initialStartLocal) };
         var startTime = new TimePicker { Time = initialStartLocal.TimeOfDay };
@@ -459,11 +531,39 @@ public static class EventEditPopover
         root.Children.Add(MakeLabel("End"));
         root.Children.Add(MakeDateTimeRow(endDate, endTime));
 
+        // TimePickers dim when all-day is on; the pickers' state is ignored
+        // by TryBuildEvent in that mode (start/end come from the dates plus
+        // midnight), so disabling them makes the invalid state unreachable
+        // rather than merely visually suppressed.
+        void ApplyAllDayVisibility()
+        {
+            var allDay = allDayToggle.IsOn;
+            startTime.IsEnabled = !allDay;
+            endTime.IsEnabled = !allDay;
+        }
+        allDayToggle.Toggled += (s, e) => ApplyAllDayVisibility();
+        ApplyAllDayVisibility();
+
         // Repeats picker (frequency + optional weekly day chips + ends mode).
         var recurrencePicker = BuildRecurrencePicker(
             initialRecurrence, initialStartLocal);
         root.Children.Add(MakeLabel("Repeats"));
         root.Children.Add(recurrencePicker.Root);
+
+        // Notes (multi-line description). Placed after Repeats so the
+        // primary scheduling fields stay grouped and the free-form field
+        // ends up at the bottom where it can grow without pushing the
+        // Save/Cancel row out of view.
+        var notesBox = new TextBox
+        {
+            PlaceholderText = "Notes",
+            Text = initialDescription ?? string.Empty,
+            AcceptsReturn = true,
+            TextWrapping = TextWrapping.Wrap,
+            MinHeight = 64
+        };
+        root.Children.Add(MakeLabel("Notes"));
+        root.Children.Add(notesBox);
 
         // Inline error (hidden until validation fails).
         var errorBlock = new TextBlock
@@ -502,8 +602,9 @@ public static class EventEditPopover
         saveButton.Click += (s, e) =>
         {
             if (TryBuildEvent(
-                    nameBox, calendarCombo, startDate, startTime, endDate, endTime,
-                    recurrencePicker, buildEvent, errorBlock, out var result))
+                    nameBox, calendarCombo, allDayToggle,
+                    startDate, startTime, endDate, endTime,
+                    notesBox, recurrencePicker, buildEvent, errorBlock, out var result))
             {
                 tcs.TrySetResult(result);
                 flyout.Hide();
@@ -525,12 +626,14 @@ public static class EventEditPopover
     private static bool TryBuildEvent(
         TextBox nameBox,
         ComboBox calendarCombo,
+        ToggleSwitch allDayToggle,
         DatePicker startDate,
         TimePicker startTime,
         DatePicker endDate,
         TimePicker endTime,
+        TextBox notesBox,
         RecurrencePicker recurrencePicker,
-        Func<string, Guid, DateTime, DateTime, RecurrenceRule?, Event> buildEvent,
+        Func<string, Guid, DateTime, DateTime, bool, string?, RecurrenceRule?, Event> buildEvent,
         TextBlock errorBlock,
         out Event? result)
     {
@@ -543,18 +646,49 @@ public static class EventEditPopover
         if (calendarCombo.SelectedItem is not Calendar calendar)
             return Fail(errorBlock, "Please select a calendar.");
 
-        var startUtc = DateHelpers.CombineLocalDateAndTimeAsUtc(startDate.Date.Date, startTime.Time);
-        var endUtc = DateHelpers.CombineLocalDateAndTimeAsUtc(endDate.Date.Date, endTime.Time);
+        var isAllDay = allDayToggle.IsOn;
 
-        if (startUtc >= endUtc)
-            return Fail(errorBlock, "End time must be after start time.");
+        // All-day is bounded by local midnight on both sides; the time
+        // pickers are ignored (and disabled) in that mode. End is the
+        // start of the day *after* the end date so single-day all-day
+        // events span [D 00:00, D+1 00:00).
+        DateTime startUtc;
+        DateTime endUtc;
+        if (isAllDay)
+        {
+            // Phase A constraint: all-day events are single-day. Multi-day
+            // all-day would render only on the start day (GroupVisibleByDay
+            // keys by StartTimeUtc's local date), and fixing that fan-out
+            // is entangled with multi-day spanning bars — both deferred to
+            // the design overhaul (see BACKLOG.md).
+            if (endDate.Date.Date != startDate.Date.Date)
+                return Fail(errorBlock, "All-day events must start and end on the same day.");
+
+            startUtc = DateHelpers.CombineLocalDateAndTimeAsUtc(startDate.Date.Date, TimeSpan.Zero);
+            endUtc = DateHelpers.CombineLocalDateAndTimeAsUtc(startDate.Date.Date.AddDays(1), TimeSpan.Zero);
+        }
+        else
+        {
+            startUtc = DateHelpers.CombineLocalDateAndTimeAsUtc(startDate.Date.Date, startTime.Time);
+            endUtc = DateHelpers.CombineLocalDateAndTimeAsUtc(endDate.Date.Date, endTime.Time);
+
+            if (startUtc >= endUtc)
+                return Fail(errorBlock, "End time must be after start time.");
+        }
 
         if (!recurrencePicker.TryRead(startUtc, endUtc, out var recurrence, out var recurrenceError))
             return Fail(errorBlock, recurrenceError!);
 
+        // Trim + null-empty so a blank Notes box round-trips as NULL in
+        // storage rather than the empty string (matches the pre-Phase-A
+        // shape of the column).
+        var description = notesBox.Text?.Trim();
+        if (string.IsNullOrEmpty(description))
+            description = null;
+
         try
         {
-            var evt = buildEvent(title, calendar.Id, startUtc, endUtc, recurrence);
+            var evt = buildEvent(title, calendar.Id, startUtc, endUtc, isAllDay, description, recurrence);
             evt.Validate();
             result = evt;
             errorBlock.Visibility = Visibility.Collapsed;

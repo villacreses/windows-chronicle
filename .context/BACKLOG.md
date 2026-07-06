@@ -22,6 +22,19 @@
 ## Visualization
 
 - Timeline view
+- Multi-day all-day events (data + visualization). The projection
+  currently keys events by `StartTimeUtc`'s local date, so a multi-day
+  all-day event would render only on its start day. Two entangled
+  changes are needed and both are deferred to the design overhaul:
+    - `EventProjection.GroupVisibleByDay` (or a peer) must fan a
+      multi-day all-day event out onto every day it covers.
+    - Month and Week must render the covered range as a single
+      spanning bar rather than N per-day chips — a layout question
+      (stacking, overlap with timed chips) more than a correctness
+      one.
+  As a Phase A guardrail, the editor constrains all-day events to
+  a single day (start date == end date). Loosening that constraint
+  depends on the two items above landing together.
 
 (Agenda view and Year view were promoted to the Local Baseline
 milestone in `EXECUTION_PLAN.md`.)

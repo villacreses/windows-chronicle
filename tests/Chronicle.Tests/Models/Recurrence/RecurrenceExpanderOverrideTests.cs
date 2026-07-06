@@ -90,6 +90,44 @@ public class RecurrenceExpanderOverrideTests
     }
 
     [Fact]
+    public void Override_DescriptionAndIsAllDay_MergeIntoOccurrence()
+    {
+        // Phase A: the editor now writes Description and IsAllDay onto
+        // OverrideFields when the user edits an occurrence. Confirm the
+        // expander's merge honors both, and that a null field on the
+        // override still inherits from the master (so an override
+        // targeting only Description does not accidentally clear
+        // IsAllDay or vice versa).
+        var master = Master(
+            "FREQ=DAILY",
+            Utc(2026, 1, 1, 9, 0),
+            duration: TimeSpan.FromHours(1));
+        master.Description = "master notes";
+        master.IsAllDay = false;
+
+        var flippedBoth = Override(master.Id, Utc(2026, 1, 2, 9, 0),
+            description: "override notes",
+            isAllDay: true);
+        var descriptionOnly = Override(master.Id, Utc(2026, 1, 3, 9, 0),
+            description: "note only");
+
+        var occ = Expand(master, Utc(2026, 1, 1), Utc(2026, 1, 4, 23, 59),
+            new[] { flippedBoth, descriptionOnly });
+
+        var day2 = occ.Single(o => o.SeriesAnchorUtc == Utc(2026, 1, 2, 9, 0));
+        Assert.Equal("override notes", day2.Description);
+        Assert.True(day2.IsAllDay);
+
+        var day3 = occ.Single(o => o.SeriesAnchorUtc == Utc(2026, 1, 3, 9, 0));
+        Assert.Equal("note only", day3.Description);
+        Assert.False(day3.IsAllDay); // null on override → inherited from master
+
+        var day1 = occ.Single(o => o.SeriesAnchorUtc == Utc(2026, 1, 1, 9, 0));
+        Assert.Equal("master notes", day1.Description);
+        Assert.False(day1.IsAllDay);
+    }
+
+    [Fact]
     public void OrphanOverride_NotMatchingAnyAnchor_IsIgnored()
     {
         // An override anchored at 08:00 never matches a 09:00 walk anchor.
