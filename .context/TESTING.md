@@ -1,682 +1,286 @@
-# Testing Strategy
-
-Chronicle should build a local-core test suite before the next wave of local
-features lands and well before any provider integration.
-
-`EXECUTION_PLAN.md` now inserts a six-feature Local Baseline — all-day
-polish, notes / description, search, agenda view, year view, notifications —
-between the current state and Google Calendar work. All six sit downstream of
-the recurrence engine, the projection cache, and the repository contracts that
-are currently only manually verified. Without tests, an untested core compounds
-risk across those features before the first provider line of code is written;
-with tests, each baseline feature is built against contracts that fail loudly
-when broken.
-
-The provider-era case still holds: recurrence, occurrence overrides, EXDATE
-skips, timezone anchoring, navigation ranges, SQLite persistence, and
-visibility filtering all define behavior that providers must later preserve.
-If those contracts are not executable, Google integration will turn local bugs
-into sync bugs, which are harder to diagnose and more expensive to unwind. The
-test suite protects both stretches: the six features ahead, and the providers
-beyond them.
-
-The goal is not "coverage for coverage's sake." The goal is antifragility:
-tests that make the most important Chronicle invariants difficult to break by
-accident.
-
-## Where the Contracts Under Test Live
-
-The architecture docs are the source of truth for the invariants and contracts
-that this suite encodes. When writing a test, fact-check the behavior against:
-
-- `architecture/RECURRENCE.md` — the eight numbered invariants, expansion
-  pipeline, EXDATE / override semantics, DST handling, anchor-zone position.
-- `architecture/DATA_MODEL.md` — identity primitives (`EventKey`, `EventRef`),
-  UTC storage, repository contracts, cascade-delete semantics, bulk-write
-  rules.
-- `architecture/USER_INTERFACE.md` — view-switching zero-query rule,
-  `_eventsByDate` as the single event cache, selection vs. range paths.
-- `architecture/CORE_ENGINE.md` — Idle Cost Budget, no-parallel-local-time
-  rule, no-ambient-background-work rule.
-- `DECISIONS.md` — rationale for why each contract is what it is (alternatives
-  weighed, tradeoffs). Useful when a test seems to demand a behavior the
-  contract doesn't, or vice versa.
-
-A test that contradicts an invariant in these docs is either testing the wrong
-thing or has surfaced a real contract drift worth raising before the test
-lands.
-
-## Principles
-
-### Test the Local Core First
-
-Provider integrations should adapt into a stable Chronicle domain model. The
-test suite should therefore start with the provider-agnostic core:
-
-- recurrence rule parsing and expansion
-- occurrence identity
-- model validation
-- date range math
-- SQLite repository behavior
-- event projection and visibility filtering
-
-This prevents a future failure mode where Google behavior is blamed for bugs
-that were already present in the local calendar model.
-
-### Prefer Pure Tests Where Possible
-
-Most of the recurrence and date behavior can be tested without WinUI, SQLite,
-or filesystem state. Those tests should be the first layer because they are
-fast, deterministic, and cheap to run after every change.
-
-Pure tests also protect against subtle future edits. For example, a developer
-changing recurrence expansion for a Google edge case should immediately know if
-they broke COUNT-before-EXDATE semantics or occurrence anchor identity.
-
-### Use SQLite Integration Tests for Storage
-
-Repository behavior should be tested against real SQLite, not mocked SQL calls.
-Chronicle depends on SQLite details that mocks would fail to exercise:
-
-- foreign key enforcement
-- transactions
-- `ON CONFLICT DO UPDATE`
-- ISO timestamp round-tripping
-- nullable columns
-- range query predicates
-- schema migration idempotence
-
-A fake repository would make the tests easier to write but less useful. The
-bugs Chronicle most needs to prevent here are storage-contract bugs.
-
-### Keep WinUI Tests Thin
-
-The first test suite should not try to automate the whole WinUI surface.
-Chronicle's renderers are programmatic WinUI builders, and full UI automation
-would be slow and brittle at this stage.
-
-Instead, extract and test pure logic currently trapped near UI code when that
-logic becomes important enough:
-
-- event projection from repository rows to rendered occurrences
-- visibility filtering
-- loaded-range coverage decisions
-- timeline overlap packing
-- recurrence picker rule construction
-
-This keeps the test suite useful without forcing MVVM, dependency injection, or
-a broad UI rewrite.
-
-### Protect Performance Contracts
-
-Chronicle's performance rules are behavioral contracts, not optional tuning.
-Tests should encode the most important ones where practical:
-
-- view switches inside an already loaded range do not query SQLite
-- calendar visibility toggles do not query SQLite
-- recurrence override loading is bulk, not per master
-- occurrence writes are rejected at the repository boundary
-
-These tests prevent slow regressions from arriving disguised as harmless
-feature work.
-
-Not every performance rule needs a test. For example, "repositories return
-concrete collections" is cheap for reviewers to verify and expensive to test
-well without reflection or analyzers. Keep that kind of rule in `DECISIONS.md`
-and code review; spend test effort on behavior that can regress invisibly, such
-as query counts and cache invalidation.
-
-### Treat Fixed Bugs As Test Seeds
-
-Every bug fixed after the suite exists should land with a failing test first,
-or with a clear note explaining why the bug cannot reasonably be tested at that
-layer.
-
-This habit matters more than any single test list in this document. A young
-suite becomes valuable fastest when real regressions leave executable fossils
-behind.
-
-### Grow the Suite with the Local Baseline
-
-The six Local Baseline features are not "add later" coverage — each lands with
-tests in the layers it touches, the same PR that ships the feature:
-
-- **All-day polish** — Layer 1 model coverage for whatever validation rules
-  Phase A defines (e.g. `IsAllDay`-vs-time-field constraints, if the audit
-  makes them explicit — `EXECUTION_PLAN.md` Phase A opens with an audit, so the
-  rules are not yet decided), Layer 4 (all-day events flow through the
-  projection cache and visibility filter correctly).
-- **Notes / description** — Layer 1 (model round-trip), Layer 3 (column
-  persistence), Layer 5 if any logic moves out of the editor.
-- **Search** — Layer 3 (query shape, predicates, recurring-master inclusion),
-  Layer 4 (result projection, recurring instances expanded under the same
-  pipeline as views).
-- **Agenda view** — Layer 4 (new range model, `_eventsByDate` reuse, zero-query
-  on already-loaded data per `architecture/USER_INTERFACE.md`).
-- **Year view** — Layer 4 (range coverage), Layer 5 if density rendering grows
-  testable logic.
-- **Notifications / reminders** — Layer 1 (reminder model validation), Layer 3
-  (persistence, cascade with `Event` deletion, override interaction), plus an
-  Idle Cost Budget assertion that the scheduler does not poll: no in-app timer
-  loop, no recurring DB wakeup. The exact test mechanism (SQLite query count,
-  timer-hook absence, platform-registration check) is decided in
-  `NOTIFICATIONS.md` when Phase C begins — the contract is "no polling," not
-  any specific instrumentation.
-
-Without this rule, the suite snapshots pre-baseline behavior and silently
-fails to grow with the calendar. The point is not exhaustive coverage of every
-new feature — it is that the feature does not ship without exercising the
-contracts it touches.
-
-## Repository Layout and Test Project Shape
-
-The repo uses the conventional .NET `src/` + `tests/` layout. Every
-project lives under its own directory, so no project's implicit
-compile glob overlaps another's:
-
-```
-Chronicle.slnx                          (solution, repo root)
-global.json                             (SDK pin)
-Directory.Build.props                   (shared MSBuild properties)
-Directory.Packages.props                (central NuGet versions)
-src/
-  Chronicle/        Chronicle.csproj    (WinUI app: Views, App.xaml, Helpers/ColorHelper+Theme)
-  Chronicle.Core/   Chronicle.Core.csproj (Models, Data, Helpers/DateHelpers — pure domain)
-tests/
-  Chronicle.Tests/  Chronicle.Tests.csproj (xUnit)
-```
-
-Run tests with `dotnet test tests/Chronicle.Tests/Chronicle.Tests.csproj`
-— no platform needed, since `Chronicle.Core` and the test project are
-AnyCPU `net8.0`. The solution-wide form pulls in the WinUI app, which
-has no AnyCPU configuration, so it requires a platform:
-`dotnet test Chronicle.slnx -p:Platform=x64`.
-
-### `Chronicle.Core` is the domain library
-
-`Chronicle.Core` is a plain `net8.0` class library holding the pure,
-non-UI code: `Models/`, `Data/` (SQLite repositories + `AppDatabase`),
-and `Helpers/DateHelpers.cs`. It carries **no** WinUI / WindowsAppSDK
-surface. The WinUI app references it; the test project references it.
-This is the assembly the architecture docs always implied — "Chronicle
-owns the domain model … provider-specific concepts must never leak
-into the UI or persistence layers" — now expressed as a real assembly
-boundary.
-
-### The test project references Core conventionally
-
-- TFM: **`net8.0`** (plain, no Windows surface).
-- Framework: **xUnit** (`xunit`, `xunit.runner.visualstudio`,
-  `Microsoft.NET.Test.Sdk`, `coverlet.collector`).
-- Properties: `IsPackable=false`, `IsTestProject=true` (`Nullable`,
-  `ImplicitUsings` come from `Directory.Build.props`).
-- **`<ProjectReference Include="..\..\src\Chronicle.Core\Chronicle.Core.csproj" />`**
-  — the standard shape. No file-include, no workaround.
-
-Core exposes its internals to the app and the tests via
-`InternalsVisibleTo("Chronicle")` / `InternalsVisibleTo("Chronicle.Tests")`
-in `Chronicle.Core.csproj` — needed because `DateHelpers` (and its
-`MonthGrid` struct) are `internal` and consumed by both. Everything in
-`Models/` is `public`.
-
-### Why the extraction (historical note)
-
-The first scaffold (commit `fd6579b`) could **not** use a
-`<ProjectReference>` to the app: `Chronicle.csproj` was
-`OutputType=WinExe` + `UseWinUI=true`, so the WindowsAppSDK injected a
-`<Module>` initializer into `Chronicle.dll` calling
-`WindowsAppRuntime.Bootstrap.Initialize()`. Any test touching any
-Chronicle type threw `REGDB_E_CLASSNOTREG` in the non-packaged test
-host. The stopgap was compiling pure source files directly into the
-test assembly via `<Compile Include>`. Extracting `Chronicle.Core`
-removed the welded-together structure that caused this, so the
-file-include stopgap is gone. Do not reintroduce it.
-
-### Framework choice: xUnit
-
-Selected over MSTest and NUnit. xUnit is the de facto standard for new
-.NET projects, has the cleanest setup model (constructor +
-`IDisposable`/`IAsyncLifetime` instead of `[TestInitialize]` /
-`[TestCleanup]`), and `[Theory]` + `[InlineData]` is essential for the
-parameterized recurrence-rule cases the suite is built around.
-Stay-boring constraints (no mocking framework, no snapshot framework,
-no FluentAssertions — use built-in `Assert.*`) apply universally; see
-the "Principles" section above.
-
-### Repo conventions adopted alongside the extraction
-
-- **`Directory.Build.props`** — shared `Nullable=enable`,
-  `LangVersion=latest`, `ImplicitUsings=disable` (matching Chronicle's
-  explicit-using style) for all three projects.
-- **`Directory.Packages.props` (Central Package Management)** — every
-  NuGet version declared once; project files reference packages without
-  a `Version`. Kills the app/Core/test version-drift problem.
-- **`global.json`** — pins the SDK (`10.0.301`, `rollForward:
-  latestMinor`) for reproducible builds on a fresh machine.
-- **`<IsAotCompatible>true</IsAotCompatible>` on `Chronicle.Core`** —
-  turns the DECISIONS.md AOT/trim guardrail into a compiler check.
-  Currently emits zero warnings.
-
-### When Layer 3 lands
-
-Layer 3 SQLite repository tests now need only:
-
-- A `<ProjectReference>`-visible `AppDatabase.Initialize(string dbPath)`
-  — **already done.** The extraction made the path seam mandatory; the
-  app passes the `ApplicationData.Current.LocalFolder.Path` location,
-  tests pass an isolated temp path. `Windows.Storage` no longer appears
-  in `Chronicle.Core`.
-- `Schema.sql` at the test output's `Data/Schema.sql` — **already
-  flows** there via Core's content copy (verified in all three project
-  outputs).
-
-The one open Layer 3 consideration: `AppDatabase` holds the path in
-static state, and xUnit runs test classes in parallel by default. DB
-test classes must either share one fixture or be placed in a single
-non-parallel xUnit collection so they don't stomp each other's path.
-Decide this when the first repository test is written.
-
-### CI and dependency discipline
-
-`dotnet test` runs locally; PR runs are to come via GitHub Actions.
-The extraction made `Chronicle.Core` and the test project plain
-`net8.0` with no Windows surface, so the **test job can run on
-`ubuntu-latest`** (fast, cheap): `dotnet test
-tests/Chronicle.Tests/Chronicle.Tests.csproj` builds only Core + the
-tests, never the WinUI app. An **optional second job on
-`windows-latest`** can gate on the app still compiling
-(`dotnet build src/Chronicle -p:Platform=x64`, which needs the Windows
-SDK / WinUI workload). Whether to add that app-build gate is a decision
-for when CI is wired. Any new test package is still a dependency —
-justify it as test-only and exclude it from the shipped app.
-Production dependencies remain subject to the `DECISIONS.md` "No New
-Dependencies Without Justification" rule.
-
-## Testability Seams Needed
-
-The current codebase is close to testable, but a few small seams would pay off.
-
-### Database Path Override — done
-
-**Resolved during the `Chronicle.Core` extraction.** `AppDatabase` no
-longer resolves its own path or references `Windows.Storage`. The
-signature is now `AppDatabase.Initialize(string dbPath)`: the app
-passes `Path.Combine(ApplicationData.Current.LocalFolder.Path,
-"chronicle.db")` from `App.OnLaunched` (the `Windows.Storage` lookup
-lives only there, at the app boundary), and tests pass an isolated
-temp path. The earlier static-initialization trap — a static field
-eagerly calling `ApplicationData.Current` — is gone because the lookup
-moved out of `Chronicle.Core` entirely.
-
-Remaining caveat for Layer 3: the path is held in static state and
-xUnit parallelizes test classes, so repository tests must share a
-fixture or live in one non-parallel collection. See "When Layer 3
-lands" above.
-
-Why this mattered:
-
-Provider sync will rely on bulk inserts, updates, deletes, and conflict
-resolution. Without real isolated database tests, sync bugs would be
-discovered only through manual app use, after data has already been
-mutated. The seam makes those tests possible.
-
-### Projection Helper Extraction
-
-**Done (2026-07-03):** landed as the internal
-`Chronicle.Projection.EventProjection` (`src/Chronicle.Core/Projection/`).
-`MainWindow` calls into it for override grouping, recurrence expansion,
-visibility filtering + day grouping, and the loaded-range coverage decision
-(`RangeCovered`). Covered by Layer 4 below.
-
-`MainWindow` previously owned event loading, recurrence expansion, loaded-range
-coverage, and visibility filtering. Some of that is pure calendar logic mixed
-with UI coordination.
-
-Extract only the pure pieces when tests need them, likely into an internal
-helper such as `EventProjectionService` or `EventProjectionHelper` **placed in
-`Chronicle.Core`** — the pure projection logic belongs in the domain library;
-`MainWindow` (in `src/Chronicle`) calls into it. Living in Core is what lets the
-test project reach it via the existing `ProjectReference`. Candidate pieces:
-
-- group overrides by series
-- expand recurring master rows
-- apply calendar visibility
-- decide whether a loaded UTC range covers a requested UTC range
-
-Do not extract the whole `MainWindow`. Do not introduce MVVM. This is a real
-refactor and should be treated as multi-step work, not a quick seam. The goal
-is a small testable helper around behavior that already exists.
-
-This extraction should happen **before Phase B of the Local Baseline** (search,
-agenda view, year view) — not after. Phase B introduces three new consumers of
-the projection pipeline: search adds a new query shape with recurring-instance
-expansion; agenda adds a new range model that needs `_eventsByDate` coverage
-decisions; year view adds another renderer reading the projection cache. If
-those features are built before the helper is extracted, they will stamp their
-shape into `MainWindow` directly, and the helper that gets pulled out later
-will be co-designed around their needs rather than the provider-neutral domain
-model. The same logic applies further out: extracting before Google integration
-prevents the Google adapter from accidentally shaping the helper. Phase B is
-the closer threat.
-
-Why this prevents later difficulty:
-
-Both Phase B features and provider integration will add more event sources, and
-the projection pipeline must remain provider-neutral. A small tested projection
-layer makes it much harder for any single consumer — local feature or external
-provider — to leak its shape into UI code.
-
-### Timeline Packing Extraction
-
-**Done (2026-07-03):** the overlap-packing algorithm and its `PackedEvent`
-result moved to the internal `Chronicle.Layout.TimelinePacker`
-(`src/Chronicle.Core/Layout/`); `TimelineRenderHelper` keeps the
-`UIElement`-building and calls `TimelinePacker.Pack`. Covered by Layer 5 below.
-
-`TimelineRenderHelper` (in `src/Chronicle/Views/Rendering`) had overlap-packing
-logic that was private. If day/week layout regressions appear, extract
-the packing algorithm — pure geometry over start/end times, no WinUI — into an
-internal helper **in `Chronicle.Core`** and test it directly via the
-`ProjectReference`. Leave the `UIElement`-building in the renderer.
-
-Why this prevents later difficulty:
-
-Rendering overlap bugs are visual, fiddly, and easy to reintroduce. Testing the
-packing result is cheaper than repeatedly verifying dense calendars by eye.
-
-## Test Layers
-
-### Layer 1: Pure Domain Tests
-
-**Status (2026-07-03): done.**
-
-These should be added first.
-
-Files (all under `src/Chronicle.Core/`):
-
-- `src/Chronicle.Core/Models/Recurrence/RecurrenceRule.cs`
-- `src/Chronicle.Core/Models/Recurrence/RecurrenceExpander.cs`
-- `src/Chronicle.Core/Models/Recurrence/EventKey.cs`
-- `src/Chronicle.Core/Models/Recurrence/EventRef.cs`
-- `src/Chronicle.Core/Models/Event.cs`
-- `src/Chronicle.Core/Models/Recurrence/EventOverride.cs`
-- `src/Chronicle.Core/Models/Recurrence/OverrideFields.cs`
-- `src/Chronicle.Core/Helpers/DateHelpers.cs`
-
-Core cases:
-
-- RRULE round-trips for daily, weekly, monthly, yearly rules
-- unsupported RRULE parts fail loudly
-- COUNT and UNTIL cannot both be specified
-- BYDAY is accepted only for weekly rules
-- BYMONTHDAY is accepted only for monthly rules
-- date-only UNTIL parses as UTC
-- all persisted event timestamps must be UTC
-- `EndTimeUtc < StartTimeUtc` is rejected
-- invalid `TimeZoneId` is rejected at the model boundary
-- `EventKey.For` preserves `(Id, SeriesAnchorUtc)`
-- `EventRef.From` returns `Master` for rows and `Occurrence` for expanded
-  occurrences
-
-Why this layer matters:
-
-These are the cheapest tests and the most stable contracts. They give immediate
-feedback when a change alters Chronicle's basic calendar language.
-
-### Layer 2: Recurrence Invariant Tests
-
-**Status (2026-07-03): done** — includes invariant #7 (bad-timezone falls
-back to legacy UTC) and tz-aware UNTIL across a DST boundary.
-
-These are the most important tests in the suite.
-
-Files:
-
-- `src/Chronicle.Core/Models/Recurrence/RecurrenceExpander.cs`
-- `src/Chronicle.Core/Models/Recurrence/EventOverride.cs`
-
-Core cases:
-
-- daily, weekly, monthly, and yearly expansion
-- weekly BYDAY emits days in Sunday-aligned order
-- weekly BYDAY does not emit anchors before the master start
-- monthly recurrence skips missing month days instead of clamping
-- Feb 29 yearly recurrence skips non-leap years
-- COUNT counts generated anchors before EXDATE filtering
-- EXDATE removes an occurrence only when the anchor matches exactly
-- an override can change title/start/end/all-day fields
-- null override fields inherit from the master
-- EXDATE wins over an override for the same anchor
-- overridden start can differ from `SeriesAnchorUtc`
-- override moved backward across a range boundary is still discovered
-- orphan override anchors are ignored
-- bad stored timezone falls back to legacy UTC expansion instead of throwing
-- `ComputeEndUtc` matches the same walk strategy used by `Expand`
-
-Timezone and DST cases:
-
-- timezone-anchored weekly event preserves wall-clock time across DST
-- legacy UTC-anchored recurring event keeps legacy UTC behavior
-- spring-forward invalid local time shifts forward
-- fall-back ambiguous local time does not crash
-- tz-aware UNTIL handling does not prematurely terminate on the DST boundary
-
-DST tests must pin explicit zones and transition dates, for example a known
-`America/New_York` spring-forward or fall-back transition in a named year, or
-compute the transition dynamically from the zone's adjustment rules. Do not use
-vague "around March" fixtures. The test should also fail loudly if a known zone
-such as `America/New_York` does not resolve in the test environment; silent
-skips would hide timezone coverage gaps.
-
-Why this layer matters:
-
-Recurrence is the hardest local feature to reason about manually. It also maps
-directly to Google, Outlook, Apple Calendar, and CalDAV. If these tests exist,
-provider adapters can be judged by whether they preserve Chronicle's recurrence
-space instead of redefining it.
-
-### Layer 3: SQLite Repository Tests
-
-**Status (2026-07-03): done.** DB tests share a single non-parallel
-`[Collection("Database")]` because `AppDatabase` holds its path in static
-state.
-
-Files (all under `src/Chronicle.Core/`):
-
-- `src/Chronicle.Core/Data/AppDatabase.cs`
-- `src/Chronicle.Core/Data/Repositories/CalendarRepository.cs`
-- `src/Chronicle.Core/Data/Repositories/EventRepository.cs`
-- `src/Chronicle.Core/Data/Repositories/OverrideRepository.cs`
-- `src/Chronicle.Core/Data/Schema.sql`
-
-Use temporary database files and real SQLite connections.
-
-Core cases:
-
-- schema initializes on a fresh database
-- recurrence migration is idempotent
-- old `RecurrenceRuleJson` column is renamed to `RecurrenceRule`
-- recurrence columns are added to older databases
-- recurrence end index exists after initialization
-- calendar insert/update/delete works
-- deleting a calendar deletes its events and overrides in one transaction
-- event insert/update/delete works
-- deleting an event deletes its overrides
-- repository refuses to insert or update expanded occurrences
-- EXDATE list round-trips with UTC precision
-- `TimeZoneId` round-trips
-- `GetByIdAsync` returns null for missing rows
-- `GetInRangeAsync` includes overlapping standalone events
-- `GetInRangeAsync` includes recurring masters that might produce visible
-  occurrences
-- `GetInRangeAsync` prunes finite recurring series whose cached end is before
-  the requested range
-- override upsert preserves one row per `(SeriesEventId, OccurrenceAnchorUtc)`
-- bulk override fetch returns all overrides for requested series and none for
-  empty input
-
-Why this layer matters:
-
-Provider sync will stress storage more than local manual use does. These tests
-make sure Chronicle can trust its local database before external data starts
-flowing into it.
-
-### Layer 4: Projection And Cache Tests
-
-**Status (2026-07-03): done** — against `Chronicle.Projection.EventProjection`
-(the extracted helper) plus `DateHelpers` view ranges. All core cases below
-covered.
-
-Files after small extraction:
-
-- event projection helper extracted from
-  `src/Chronicle/Views/MainWindow.xaml.cs` — the extracted pure helper lands
-  in `src/Chronicle.Core/` (see "Projection Helper Extraction" above), so the
-  test project reaches it through the existing `ProjectReference`.
-- `src/Chronicle.Core/Helpers/DateHelpers.cs`
-
-Core cases:
-
-- standalone events pass through unchanged
-- recurring masters are replaced by expanded occurrences
-- recurring masters themselves do not enter the projected event list
-- overrides are grouped by series and applied to the right master
-- events group under local day keys
-- hidden calendars are filtered without changing the projected source list
-- empty visibility map treats all calendars as visible
-- requested range inside loaded range does not require a reload
-- requested range outside loaded range requires a reload
-- Month, Week, and Day view ranges match local calendar boundaries
-
-Why this layer matters:
-
-This is the bridge between storage and UI. It protects the "single event
-cache" model and prevents future provider work from creating a parallel event
-pipeline.
-
-### Layer 5: Thin UI Logic Tests
-
-**Status (2026-07-05): done** — both extractable targets landed. The
-overlap-packing geometry is in `Chronicle.Layout.TimelinePacker`; the
-recurrence-picker rule construction / seed mapping is in
-`Chronicle.Models.Recurrence.RecurrencePickerModel` and the Windows→IANA
-write-boundary normalization in `RecurrenceTimeZone`. All are extracted from
-their WinUI hosts (`TimelineRenderHelper`, `EventEditPopover`) and tested
-directly. The only remaining candidate — selected-day event sorting — waits
-on an explicit ordering contract.
-
-This layer should come after the local core is covered.
-
-Possible targets:
-
-- ✓ recurrence picker rule construction, extracted from `EventEditPopover`
-- ✓ timeline overlap packing, extracted from `TimelineRenderHelper`
-- selected-day event sorting, if the ordering contract becomes explicit
-
-Avoid in the first wave:
-
-- full WinUI automation
-- screenshot testing
-- testing exact colors or visual tree shapes
-- testing private methods through reflection
-
-Why this layer matters:
-
-Some UI-adjacent logic is important, but the first suite should not become
-fragile by depending on visual implementation details. Test the decisions, not
-the pixels.
-
-## Suggested First Milestone
-
-The first milestone should produce a small, fast suite that runs from the
-command line and proves the core recurrence model.
-
-Minimum useful set:
-
-- ✓ create `Chronicle.Tests` (scaffolded; see "Test Project Shape")
-- ✓ verify the app still builds
-- ✓ verify the tests run locally (smoke tests pass)
-- ✓ add tests for `RecurrenceRule`
-- ✓ add tests for `RecurrenceExpander`
-- ✓ add tests for `Event`, `EventKey`, and `EventRef`
-- ✓ add tests for `DateHelpers`
-- verify the tests run on pull requests (CI not yet wired)
-
-This gives immediate protection to the highest-risk local behavior without
-touching repositories or WinUI.
-
-## Suggested Second Milestone
-
-The second milestone should make repositories testable against isolated
-SQLite databases.
-
-Work:
-
-- ✓ narrow `AppDatabase` test seam (`Initialize(string dbPath)`, done in
-  the Core extraction)
-- ✓ reference `Chronicle.Core`'s `Data/` is already available via the
-  existing `ProjectReference` — no csproj change needed
-- ✓ decide the parallelism story for DB tests — resolved: a single
-  non-parallel `[Collection("Database")]`, given `AppDatabase`'s static
-  path (base classes in `tests/Chronicle.Tests/Data/DatabaseTest.cs`)
-- ✓ test schema initialization and migrations
-- ✓ test calendar/event/override CRUD
-- ✓ test cascade delete behavior
-- ✓ test range query behavior
-
-This is the point where Chronicle starts gaining confidence against data-loss
-classes of bugs.
-
-## Suggested Third Milestone
-
-The third milestone should harden the app-level event pipeline.
-
-Work:
-
-- ✓ extract projection/filter/range-coverage helper logic from `MainWindow`
-- ✓ test recurrence expansion through that helper
-- ✓ test calendar visibility filtering
-- ✓ test cache coverage decisions
-- ✓ test Month/Week/Day range selection
-
-This should land before Phase B of the Local Baseline (search / agenda / year
-view) begins, and well before Google integration. It prevents local navigation
-and view switching from regressing while new event-pipeline consumers — first
-Phase B features, then providers — are added, and it keeps the
-provider-neutral event pipeline from being designed around any single
-consumer's needs.
-
-## What Not To Do Yet
-
-Do not begin with full UI automation. It will be slow, brittle, and will not
-cover the recurrence/storage contracts where Chronicle carries the most risk.
-
-Do not introduce a mocking framework in the first wave. The codebase is small,
-and the important dependencies are either pure functions or real SQLite. Mocks
-would add dependency weight without protecting the right behavior.
-
-Do not refactor toward MVVM or DI for testing. The existing architecture
-intentionally avoids those frameworks. Testing should respect that decision and
-extract only small pure helpers where the current code already contains
-test-worthy logic.
-
-Do not test provider behavior before the local recurrence and storage contracts
-are executable. Provider integration tests should eventually assert mapping
-into Chronicle's domain model, not define the domain model by accident.
-
-## Long-Term Direction
-
-After Google integration begins, provider tests should be layered on top of the
-local suite:
-
-- adapter mapping tests using representative Google payloads
-- sync-state tests using local SQLite
-- conflict-resolution tests
-- token-storage tests with fake secrets, never real accounts
-- opt-in background/scheduled sync tests that protect the Idle Cost Budget
-
-Those tests will only be meaningful if the local suite already defines what
-Chronicle considers a correct calendar.
-
-The test suite should make one thing clear: providers are inputs. Chronicle's
-local model is the product.
+# Testing
+
+Chronicle's test suite is a five-layer xUnit suite over `Chronicle.Core`. It
+pins the provider-neutral domain — recurrence, storage, the projection/cache
+pipeline, timeline layout, and the recurrence-picker model — so the contracts
+those subsystems expose fail loudly when broken. It is the executable half of
+the architecture docs: where `architecture/RECURRENCE.md`,
+`architecture/DATA_MODEL.md`, `architecture/USER_INTERFACE.md`, and
+`architecture/CORE_ENGINE.md` state an invariant, this suite enforces it.
+
+This document is the subsystem map for that suite. It defines the layers,
+the seams that make the domain testable, the boundaries the suite refuses to
+cross, the invariants it pins, and the rule for which layer a change belongs
+to. A change that contradicts an invariant here is either testing the wrong
+thing or has surfaced real contract drift worth raising before it lands.
+
+## Assembly Shape
+
+The domain is a separate assembly, and the test project references it
+conventionally:
+
+- **`src/Chronicle.Core`** (plain `net8.0`, no WinUI) — `Models/`, `Data/`,
+  `Helpers/`, `Projection/`, `Layout/`. The source of truth under test.
+- **`src/Chronicle`** (WinUI app) — renderers, popovers, `MainWindow`. Calls
+  into Core; carries no domain logic the suite needs to reach.
+- **`tests/Chronicle.Tests`** (xUnit, plain `net8.0`) — references
+  `Chronicle.Core` via `<ProjectReference>`.
+
+Core exposes its internals to the app and the tests with
+`InternalsVisibleTo("Chronicle")` / `InternalsVisibleTo("Chronicle.Tests")`.
+The pure helpers the suite targets are `internal`; the test project reaches
+them through that grant, not through a widened public surface.
+
+Run the suite with `dotnet test tests/Chronicle.Tests/Chronicle.Tests.csproj`
+— plain `net8.0`, no platform, because Core and the tests carry no Windows
+surface. Changes that touch the WinUI app are additionally gated on the app
+still compiling: `dotnet build src/Chronicle -p:Platform=x64` (needs the
+Windows SDK / WinUI workload).
+
+## Framework Constraints
+
+- **xUnit.** `[Theory]` + `[InlineData]` carry the parameterized recurrence
+  and validation cases the suite is built around.
+- **Built-in `Assert.*` only.** No FluentAssertions, no snapshot framework.
+- **No mocking framework.** The load-bearing dependencies are pure functions
+  or real SQLite; a mock would add weight without protecting the behavior that
+  matters.
+
+These are absolute for the local suite. A new test package must justify itself
+as test-only and stay out of the shipped app (`DECISIONS.md` "No New
+Dependencies Without Justification").
+
+## The Five Layers
+
+### Layer 1 — Pure Domain
+
+Cheapest, most stable contracts: the calendar's basic language.
+
+Covers `RecurrenceRule` (RRULE parse / canonical round-trip / part
+validation), `RecurrenceExpander` basic expansion, `EventKey`, `EventRef`,
+`Event.Validate`, `EventOverride.Validate`, and `DateHelpers` (grid/week/day
+geometry and the local↔UTC conversions).
+
+Enforces: RRULE round-trips to canonical form; unsupported RRULE parts fail
+loudly; `COUNT` and `UNTIL` are mutually exclusive; `BYDAY` is weekly-only,
+`BYMONTHDAY` monthly-only; date-only `UNTIL` parses as UTC; all persisted
+timestamps are UTC-kind; `EndTimeUtc >= StartTimeUtc`; an unresolvable
+`TimeZoneId` is rejected at the model boundary; `EventKey.For` preserves
+`(Id, SeriesAnchorUtc)`; `EventRef.From` returns `Master` for rows and
+`Occurrence` for expanded instances.
+
+### Layer 2 — Recurrence Invariants
+
+The most important layer. Recurrence maps directly onto every provider, so
+these tests are the definition of Chronicle's occurrence space.
+
+Covers `RecurrenceExpander` (`Expand`, `ComputeEndUtc`, and the tz-aware
+`WalkAnchorsForMaster` dispatch) and `EventOverride` merge semantics. The
+eight named invariants live in `architecture/RECURRENCE.md`; this layer is
+where they are executable.
+
+Enforces:
+
+- Daily / weekly / monthly / yearly expansion; weekly `BYDAY` emits in
+  Sunday-aligned order and never before the master start; monthly skips
+  missing month-days instead of clamping; Feb 29 yearly skips non-leap years.
+- `COUNT` counts generated anchors **before** EXDATE filtering (invariant #6);
+  EXDATE removes an occurrence only on an exact anchor match.
+- Override merge: null fields inherit from the master; an override may move
+  start/end/title/all-day; EXDATE wins over an override at the same anchor;
+  an override that pulls a future anchor back into the window is still
+  discovered; orphan overrides are ignored; `ComputeEndUtc` walks the same
+  strategy as `Expand` (invariant #8).
+- DST and time zones: a tz-anchored series preserves wall-clock time across
+  spring-forward; a legacy UTC-anchored series keeps legacy UTC behavior;
+  spring-forward invalid local times shift forward; fall-back ambiguous times
+  do not crash; tz-aware `UNTIL` is not prematurely terminated at the DST
+  boundary (`TzWalkPad`); a bad stored `TimeZoneId` degrades to the legacy UTC
+  walk instead of throwing (invariant #7).
+
+DST tests pin explicit zones and explicit transition dates (e.g.
+`America/New_York`, 2026 spring-forward Mar 8 / fall-back Nov 1) and fail loudly
+if a required zone does not resolve in the environment — silent skips would
+hide timezone coverage gaps.
+
+### Layer 3 — SQLite Repositories
+
+Storage-contract bugs are the class Chronicle most needs to prevent before
+provider data flows in. This layer runs against **real SQLite** on isolated
+temp databases — never mocked SQL.
+
+Covers `AppDatabase` (schema init + migration), `CalendarRepository`,
+`EventRepository`, `OverrideRepository`, and `Schema.sql`.
+
+Enforces: schema initializes on a fresh database and re-initializes
+idempotently on a populated one; the recurrence migration is idempotent
+(`RecurrenceRuleJson` → `RecurrenceRule` rename preserves data, recurrence
+columns and the end index are added to legacy databases); calendar / event /
+override CRUD round-trips; deleting a calendar cascade-deletes its events and
+their overrides in one transaction, and deleting an event cascade-deletes its
+overrides; `EventRepository.RefuseOccurrence` rejects any attempt to persist an
+expanded occurrence; EXDATE lists and `TimeZoneId` round-trip with full UTC
+precision; `GetByIdAsync` returns null for a missing row; `GetInRangeAsync`
+includes overlapping standalones (inclusive at both bounds) and recurring
+masters that may still project into the window, and prunes finite series whose
+cached end precedes the range; override upsert preserves one row per
+`(SeriesEventId, OccurrenceAnchorUtc)` with a stable `Id`, and bulk fetch
+returns every override for the requested series and nothing for empty input;
+`PRAGMA foreign_keys = ON` is enforced (orphan event and orphan override
+inserts are rejected); the `OverrideRepository.UpsertAsync` guards reject
+non-UTC anchor / start / end and end-before-start before any SQL runs.
+
+### Layer 4 — Projection & Cache
+
+The bridge between storage and UI. It protects the single-event-cache model
+and keeps any one consumer from forking the pipeline.
+
+Covers `EventProjection` (the pure projection helper) and the `DateHelpers`
+view ranges, plus an end-to-end integration test that drives the real
+repositories and `EventProjection` together against SQLite.
+
+Enforces: standalone events pass through unchanged; recurring masters are
+replaced by their expanded occurrences and never appear as themselves;
+overrides are grouped by series and applied to the correct master; events group
+under local day keys; calendar visibility filters without mutating the source
+list; an empty visibility map treats every calendar as visible and an unlisted
+calendar defaults to visible; `RangeCovered` is true only when the loaded range
+contains the requested one (the invalidation sentinel never covers); Month,
+Week, and Day load ranges match local calendar boundaries; `OrderForDay`
+orders a day all-day-first, then by start instant, ties broken by title. The
+integration test proves the links compose: persisted EXDATE and override rows
+survive serialization and merge onto the masters they expand from, hidden
+calendars drop after load, and series pruned by the range query never reach
+the expander.
+
+### Layer 5 — Thin UI Logic
+
+Pure logic that once lived next to WinUI, now in Core so its decisions are
+testable without a UI. The suite tests the decisions, not the pixels.
+
+Covers `TimelinePacker` (overlap-packing geometry), `RecurrencePickerModel`
+(recurrence rule ⇄ picker state), and `RecurrenceTimeZone` (write-boundary
+zone normalization).
+
+Enforces: non-overlapping and boundary-touching events pack full-width;
+overlapping events split into equal side-by-side columns and a freed column is
+reused within a cluster; vertical position/height derive from local time, with
+a minimum-height floor, a half-hour fallback for zero-duration, and trimming at
+the end of the day; `BuildRule` produces the correct rule per frequency with
+the picker's inline validation (weekly requires a day, count is a positive
+integer, the end date is on/after start, `UNTIL` is the inclusive end of the
+chosen day), `SeedState` maps a rule back to picker state, and the two
+round-trip within the picker's representable subset; `NormalizeToIana` converts
+a Windows zone id to IANA, passes an IANA id through, and degrades an
+unmappable id to UTC (never persisting an unmapped string).
+
+## Seams
+
+Four seams make the domain reachable without dragging WinUI or a live
+filesystem into the test host. Each is `internal` in `Chronicle.Core`; the
+WinUI host calls into it and owns nothing the seam owns.
+
+- **`AppDatabase.Initialize(string dbPath)`** — the database-path seam. The
+  app supplies the `ApplicationData` location at its boundary; tests supply an
+  isolated temp path. `Windows.Storage` never appears in Core. `GetConnection`
+  enables `PRAGMA foreign_keys = ON` on every connection.
+- **`Chronicle.Projection.EventProjection`** — the event-pipeline seam:
+  `GroupOverridesBySeries`, `ExpandRecurrences` (masters never survive),
+  `GroupVisibleByDay` (visibility filter + day grouping + `OrderForDay`), and
+  `RangeCovered`. `MainWindow` orchestrates the repository reads around it but
+  holds none of this logic.
+- **`Chronicle.Layout.TimelinePacker`** — the timeline-geometry seam: `Pack`
+  returns column/position/height layout as plain data (`PackedEvent`).
+  `TimelineRenderHelper` keeps only the `UIElement` building.
+- **`Chronicle.Models.Recurrence.RecurrencePickerModel`** (with
+  `RecurrenceTimeZone`) — the picker seam: rule construction, seed mapping, and
+  validation over a plain `RecurrencePickerState`. `EventEditPopover` keeps
+  only the WinUI control wiring.
+
+## Boundaries
+
+The suite does not cross these lines. Work that requires crossing one is out
+of scope, not a gap to close.
+
+- **No UI automation.** No WinUI rendering, visual-tree assertions,
+  screenshots, or color/font/geometry-of-controls checks. Renderer correctness
+  is verified by testing the pure inputs (`TimelinePacker`, `EventProjection`)
+  and by the app-build gate, not by driving the UI.
+- **No mocks for SQLite.** Storage is tested against real SQLite; foreign
+  keys, transactions, `ON CONFLICT DO UPDATE`, ISO round-tripping, and range
+  predicates are the point.
+- **No MVVM / DI drift.** Tests respect `DECISIONS.md` "Avoid Premature MVVM":
+  no MVVM toolkit, DI container, or reactive framework is introduced to make
+  code testable. Testability comes from extracting small pure helpers into
+  Core, not from restructuring the app.
+- **No parallel DB stomping.** `AppDatabase` holds its path in static state, so
+  every database-touching test class belongs to the single non-parallel
+  `[Collection("Database")]`.
+
+`ColorHelper`'s color math is intentionally not covered: it is typed on the
+WinUI `Color` struct, and Core is plain `net8.0`; moving it would breach that
+boundary for negligible gain.
+
+## Test Infrastructure
+
+- **`tests/Chronicle.Tests/Data/DatabaseTest.cs`** — the DB harness.
+  `DatabaseCollection` is the non-parallel `[CollectionDefinition]`;
+  `DatabaseTest` owns an isolated temp database and clears the connection pool
+  on teardown so the file can be deleted; `InitializedDatabaseTest` runs
+  `Schema.sql` + migration first. Repository tests derive from the latter and
+  carry `[Collection(DatabaseCollection.Name)]`; migration tests derive from
+  `DatabaseTest` to stage a pre-migration schema themselves.
+- **`RepositoryTestData`** — builders for valid, UTC-kind `Calendar` / `Event`
+  entities (`NewCalendar`, `StandaloneEvent`, `RecurringMaster`, `Utc`).
+- **`RecurrenceTestSupport`** — builders for expander tests (`Utc`, `Master`,
+  `Override`, and a list-materializing `Expand`).
+
+Determinism rules the suite follows: timezone-dependent assertions round-trip
+UTC bounds back through local time so they hold in any zone; packing tests pin
+`TimeZoneInfo.Utc` and a clean pixels-per-hour height so geometry is exact;
+DST tests pin named zones and explicit transition dates.
+
+## Routing a Change to a Layer
+
+Every change lands in the layer that owns the behavior it touches, and carries
+its tests in the same change:
+
+- **Recurrence rules or expansion** (`RecurrenceRule`, `RecurrenceExpander`,
+  overrides, DST) → Layers 1–2. A semantic change to the RRULE surface, the
+  anchor walk, or the tz-evaluation strategy is a breaking change to the
+  projection space (`RECURRENCE.md` invariant #2) and must update the pinned
+  invariants deliberately, not incidentally.
+- **Persistence** (`AppDatabase`, repositories, `Schema.sql`, migrations) →
+  Layer 3, against real SQLite. New schema or migration steps carry an
+  idempotence test; new query shapes carry range/inclusion/pruning tests.
+- **The event pipeline** (`EventProjection`, view ranges, cache coverage,
+  day ordering) → Layer 4, with the integration test extended when a change
+  alters how repository reads compose into the projection.
+- **Extractable UI-adjacent logic** (timeline geometry, picker rule
+  construction, zone normalization) → Layer 5. New pure logic pulled out of a
+  renderer or popover lands in `Chronicle.Core` behind a seam and is tested
+  there; the WinUI host retains only element building and control wiring.
+
+A fixed bug lands with a test that fails without the fix, or a note explaining
+why it cannot be tested at that layer. A change to a subsystem the suite
+already covers is not complete until its layer's tests cover the new behavior;
+this is what keeps the suite growing with the calendar instead of snapshotting
+a frozen moment.
+
+Performance contracts are behavioral and are pinned where they can regress
+invisibly: view switches inside a loaded range issue no query (`RangeCovered`),
+visibility toggles re-filter without a query (`GroupVisibleByDay`), override
+loading is bulk not per-master, and occurrence writes are refused at the
+repository boundary. Rules cheap to verify by reading code (e.g. "repositories
+return concrete collections") stay in `DECISIONS.md` and review, not in tests.
+
+## Provider-Era Direction
+
+The one forward-facing part of the strategy. When provider integration begins,
+provider tests layer on top of this local suite rather than redefining it:
+adapter-mapping tests over representative provider payloads, sync-state tests
+against local SQLite, conflict-resolution tests, token-storage tests with fake
+secrets (never real accounts), and opt-in scheduled-sync tests that protect the
+Idle Cost Budget. Those tests assert mapping *into* Chronicle's domain model;
+they do not get to define it. The suite's standing message holds: providers are
+inputs, and the local model is the product.
