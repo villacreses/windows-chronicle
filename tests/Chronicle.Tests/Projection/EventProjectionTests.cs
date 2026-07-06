@@ -262,4 +262,65 @@ public sealed class EventProjectionTests
         Assert.False(EventProjection.RangeCovered(
             DateTime.MaxValue, DateTime.MinValue, Utc(2026, 6, 1), Utc(2026, 6, 30)));
     }
+
+    // ── OrderForDay ───────────────────────────────────────────────────────
+
+    [Fact]
+    public void OrderForDay_AllDayFirst_ThenTimedByStart()
+    {
+        var calendarId = NewCalendar().Id;
+        var timedLate = StandaloneEvent(calendarId, startUtc: Utc(2026, 6, 1, 15, 0), title: "Late");
+        var timedEarly = StandaloneEvent(calendarId, startUtc: Utc(2026, 6, 1, 9, 0), title: "Early");
+        var allDay = StandaloneEvent(
+            calendarId, startUtc: Utc(2026, 6, 1, 0, 0), title: "Holiday", isAllDay: true);
+
+        var ordered = EventProjection.OrderForDay(new[] { timedLate, allDay, timedEarly });
+
+        Assert.Equal(new[] { allDay, timedEarly, timedLate }, ordered);
+    }
+
+    [Fact]
+    public void OrderForDay_TiesBreakByTitleCaseInsensitive()
+    {
+        var calendarId = NewCalendar().Id;
+        var beta = StandaloneEvent(calendarId, startUtc: Utc(2026, 6, 1, 9, 0), title: "beta");
+        var alpha = StandaloneEvent(calendarId, startUtc: Utc(2026, 6, 1, 9, 0), title: "Alpha");
+
+        var ordered = EventProjection.OrderForDay(new[] { beta, alpha });
+
+        Assert.Equal(new[] { alpha, beta }, ordered);
+    }
+
+    [Fact]
+    public void OrderForDay_AllDayEventsSortByTitle_NotByStart()
+    {
+        // All-day events ignore start when ordering among themselves: Apple
+        // sorts before Zebra despite Zebra's earlier stored start.
+        var calendarId = NewCalendar().Id;
+        var zebra = StandaloneEvent(
+            calendarId, startUtc: Utc(2026, 6, 1, 3, 0), title: "Zebra", isAllDay: true);
+        var apple = StandaloneEvent(
+            calendarId, startUtc: Utc(2026, 6, 1, 8, 0), title: "Apple", isAllDay: true);
+
+        var ordered = EventProjection.OrderForDay(new[] { zebra, apple });
+
+        Assert.Equal(new[] { apple, zebra }, ordered);
+    }
+
+    [Fact]
+    public void GroupVisibleByDay_OrdersEachDay_ViaOrderForDay()
+    {
+        var calendarId = NewCalendar().Id;
+        // Same instant → one day group regardless of the test machine's zone;
+        // the all-day event must still sort ahead of the timed one.
+        var timed = StandaloneEvent(calendarId, startUtc: Utc(2026, 6, 1, 12, 0), title: "Timed");
+        var allDay = StandaloneEvent(
+            calendarId, startUtc: Utc(2026, 6, 1, 12, 0), title: "AllDay", isAllDay: true);
+
+        var result = EventProjection.GroupVisibleByDay(
+            new[] { timed, allDay }, new Dictionary<Guid, bool>());
+
+        var day = Assert.Single(result.Values);
+        Assert.Equal(new[] { allDay, timed }, day);
+    }
 }

@@ -19,10 +19,11 @@ namespace Chronicle.Views.Rendering;
 ///   <item>Builds event rows as full-width <see cref="Button"/>s whose click
 ///   opens the edit dialog directly — a deliberately different interaction
 ///   from the grid/week event chips, which open the read-only popover.</item>
-///   <item>Reads the pre-filtered, pre-sorted events handed to
-///   <see cref="Render"/>; it owns no navigation or event state and performs
-///   no querying. Kept separate from <see cref="SidebarRenderer"/> so
-///   calendar-list and selected-day concerns don't share a class.</item>
+///   <item>Reads the pre-filtered, pre-ordered events handed to
+///   <see cref="Render"/> (all-day first, then by start time — see
+///   <c>EventProjection.OrderForDay</c>); it owns no navigation or event state
+///   and performs no querying. Kept separate from <see cref="SidebarRenderer"/>
+///   so calendar-list and selected-day concerns don't share a class.</item>
 /// </list>
 /// </summary>
 internal sealed class SelectedDayRenderer
@@ -39,7 +40,7 @@ internal sealed class SelectedDayRenderer
     /// <summary>
     /// Renders the panel for <paramref name="selectedDate"/> and its
     /// <paramref name="events"/> (already filtered to visible calendars and
-    /// ordered by start time). Row clicks route through
+    /// ordered all-day-first, then by start time). Row clicks route through
     /// <see cref="ICalendarInteractionHost.OnEventActivated"/> — which opens
     /// the edit popover directly, a deliberately different interaction from
     /// the grid/week event chips' read-only popover.

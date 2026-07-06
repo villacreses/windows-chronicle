@@ -556,14 +556,16 @@ pipeline.
 
 ### Layer 5: Thin UI Logic Tests
 
-**Status (2026-07-05): done** — both extractable targets landed. The
-overlap-packing geometry is in `Chronicle.Layout.TimelinePacker`; the
-recurrence-picker rule construction / seed mapping is in
-`Chronicle.Models.Recurrence.RecurrencePickerModel` and the Windows→IANA
-write-boundary normalization in `RecurrenceTimeZone`. All are extracted from
-their WinUI hosts (`TimelineRenderHelper`, `EventEditPopover`) and tested
-directly. The only remaining candidate — selected-day event sorting — waits
-on an explicit ordering contract.
+**Status (2026-07-05): done** — all three targets landed. The overlap-packing
+geometry is in `Chronicle.Layout.TimelinePacker`; the recurrence-picker rule
+construction / seed mapping is in
+`Chronicle.Models.Recurrence.RecurrencePickerModel` (with Windows→IANA
+write-boundary normalization in `RecurrenceTimeZone`); and the per-day event
+ordering contract is now explicit in `EventProjection.OrderForDay` (all-day
+first, then by start time, ties by title) — tested and applied by
+`GroupVisibleByDay` so every day surface shares it. All are extracted from
+their WinUI hosts (`TimelineRenderHelper`, `EventEditPopover`,
+`SelectedDayRenderer`'s pipeline) and tested directly.
 
 This layer should come after the local core is covered.
 
@@ -571,7 +573,8 @@ Possible targets:
 
 - ✓ recurrence picker rule construction, extracted from `EventEditPopover`
 - ✓ timeline overlap packing, extracted from `TimelineRenderHelper`
-- selected-day event sorting, if the ordering contract becomes explicit
+- ✓ selected-day event sorting — ordering contract made explicit in
+  `EventProjection.OrderForDay`
 
 Avoid in the first wave:
 
