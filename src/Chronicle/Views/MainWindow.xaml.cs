@@ -841,8 +841,10 @@ namespace Chronicle
         /// occurrence-edit popover pre-filled from the merged occurrence
         /// values, converts the result into <see cref="OverrideFields"/>,
         /// and writes via <see cref="OverrideRepository.UpsertAsync"/>.
-        /// Description and IsAllDay aren't on the popover's form, so they
-        /// stay null on the override (= inherit from master).
+        /// All five override-eligible fields (Title, Description,
+        /// StartTimeUtc, EndTimeUtc, IsAllDay) are snapshotted from the
+        /// editor result; the expander's merge treats each as an
+        /// authoritative per-occurrence value.
         /// </summary>
         private async Task EditOccurrenceAsync(
             EventRef.Occurrence target,
@@ -857,8 +859,10 @@ namespace Chronicle
 
             var fields = new OverrideFields(
                 Title: edited.Title,
+                Description: edited.Description,
                 StartTimeUtc: edited.StartTimeUtc,
-                EndTimeUtc: edited.EndTimeUtc);
+                EndTimeUtc: edited.EndTimeUtc,
+                IsAllDay: edited.IsAllDay);
 
             await _overrideRepository.UpsertAsync(target, fields);
             InvalidateLoadedEvents();

@@ -127,6 +127,18 @@ internal sealed class SelectedDayRenderer
         textColumn.Children.Add(timeBlock);
         textColumn.Children.Add(titleBlock);
 
+        if (!string.IsNullOrWhiteSpace(capturedEvt.Description))
+        {
+            textColumn.Children.Add(new TextBlock
+            {
+                Text = capturedEvt.Description,
+                FontSize = 11,
+                Foreground = new SolidColorBrush(CalendarRenderHelper.MutedText),
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                MaxLines = 1
+            });
+        }
+
         var content = new StackPanel
         {
             Orientation = Orientation.Horizontal,
