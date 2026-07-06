@@ -301,6 +301,124 @@ public sealed class EventRepository
         };
     }
 
+    /// <summary>
+    /// Returns candidate rows for a text search over Title / Description
+    /// within a UTC window. The result is the input to
+    /// <c>EventProjection.SearchOccurrences</c>, which expands recurring
+    /// masters into occurrences and re-filters each merged occurrence's
+    /// Title / Description against the same query — because an override
+    /// can flip either field either direction and the DB-level match
+    /// works on stored strings, not merged ones.
+    ///
+    /// The candidate set is the union of:
+    /// <list type="bullet">
+    ///   <item>rows whose stored Title or Description matches (standalone
+    ///   or master), and</item>
+    ///   <item>recurring masters whose <c>EventOverrides</c> carry a
+    ///   Title or Description match — the master itself may not match
+    ///   but one of its occurrences might. This union at the SQL layer
+    ///   is what closes the "override-only match" gap the load pipeline
+    ///   tolerates in the non-search path (see RECURRENCE.md,
+    ///   "Master-loading gap for cross-boundary overrides").</item>
+    /// </list>
+    ///
+    /// <para>An empty or whitespace <paramref name="query"/> returns an
+    /// empty list; the repository never treats it as "match everything."
+    /// </para>
+    ///
+    /// The window filter matches <see cref="GetInRangeAsync"/>: finite
+    /// series are pruned by <c>RecurrenceEndUtcCached</c> (advisory),
+    /// standalone rows by the standard overlap check. Range refinement
+    /// on merged occurrence start/end happens at the projection layer.
+    /// </summary>
+    public async Task<List<Event>> SearchCandidatesAsync(
+        string query,
+        DateTime rangeStartUtc,
+        DateTime rangeEndUtc)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+            return new List<Event>();
+
+        using var connection =
+            AppDatabase.GetConnection();
+
+        using var command =
+            connection.CreateCommand();
+
+        command.CommandText =
+        """
+        SELECT
+            e.Id,
+            e.CalendarId,
+            e.Title,
+            e.Description,
+            e.StartTimeUtc,
+            e.EndTimeUtc,
+            e.IsAllDay,
+            e.RecurrenceRule,
+            e.RecurrenceExDatesUtc,
+            e.RecurrenceEndUtcCached,
+            e.TimeZoneId,
+            e.CreatedAtUtc,
+            e.UpdatedAtUtc
+        FROM Events e
+        WHERE
+        (
+            (e.RecurrenceRule IS NULL
+             AND e.EndTimeUtc >= $rangeStartUtc
+             AND e.StartTimeUtc <= $rangeEndUtc)
+            OR
+            (e.RecurrenceRule IS NOT NULL
+             AND e.StartTimeUtc <= $rangeEndUtc
+             AND (e.RecurrenceEndUtcCached IS NULL
+                  OR e.RecurrenceEndUtcCached >= $rangeStartUtc))
+        )
+        AND (
+            e.Title LIKE $like ESCAPE '\'
+            OR e.Description LIKE $like ESCAPE '\'
+            OR (e.RecurrenceRule IS NOT NULL AND EXISTS (
+                SELECT 1 FROM EventOverrides o
+                WHERE o.SeriesEventId = e.Id
+                AND (o.Title LIKE $like ESCAPE '\'
+                     OR o.Description LIKE $like ESCAPE '\')
+            ))
+        )
+        ORDER BY e.StartTimeUtc;
+        """;
+
+        command.Parameters.AddWithValue(
+            "$rangeStartUtc",
+            rangeStartUtc.ToString("O"));
+
+        command.Parameters.AddWithValue(
+            "$rangeEndUtc",
+            rangeEndUtc.ToString("O"));
+
+        command.Parameters.AddWithValue(
+            "$like",
+            BuildLikePattern(query));
+
+        using var reader = await command.ExecuteReaderAsync();
+
+        var events = new List<Event>();
+        while (await reader.ReadAsync())
+            events.Add(ReadEvent(reader));
+
+        return events;
+    }
+
+    // Escape SQL LIKE metacharacters so a query like "50%" doesn't
+    // become a wildcard match. The backslash is declared as the
+    // ESCAPE character in the SQL text.
+    private static string BuildLikePattern(string query)
+    {
+        var escaped = query
+            .Replace("\\", "\\\\")
+            .Replace("%", "\\%")
+            .Replace("_", "\\_");
+        return "%" + escaped + "%";
+    }
+
     public async Task<List<Event>> GetInRangeAsync(
         DateTime rangeStartUtc,
         DateTime rangeEndUtc)
