@@ -108,6 +108,8 @@
                                       BorderThickness="0"/>
                         <ToggleButton x:Name="AgendaViewToggle" Content="Agenda" Padding="16,4"
                                       BorderThickness="0"/>
+                        <ToggleButton x:Name="YearViewToggle" Content="Year" Padding="16,4"
+                                      BorderThickness="0"/>
                     </StackPanel>
                 </Border>
             </Grid>
@@ -144,6 +146,9 @@
 
             <!-- Agenda View (chronological upcoming list; populated by AgendaViewRenderer) -->
             <Grid x:Name="AgendaViewRoot" Grid.Row="1" Visibility="Collapsed"/>
+
+            <!-- Year View (4x3 mini-month grid, density-tinted; populated by YearViewRenderer) -->
+            <Grid x:Name="YearViewRoot" Grid.Row="1" Visibility="Collapsed"/>
         </Grid>
     </Grid>
 </Window>

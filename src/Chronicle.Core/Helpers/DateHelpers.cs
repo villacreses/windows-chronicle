@@ -165,4 +165,18 @@ internal static class DateHelpers
         var endUtc = endExclusiveLocal.ToUniversalTime().AddTicks(-1);
         return (startLocal.ToUniversalTime(), endUtc);
     }
+
+    /// <summary>
+    /// Gets the start (UTC) and end (UTC, inclusive) boundaries of the
+    /// calendar year containing <paramref name="date"/>. Used by Year View,
+    /// which loads a whole year in one pass — realistic single-user
+    /// calendars keep well inside the memory footprint that would justify a
+    /// separate counts-per-day projection.
+    /// </summary>
+    public static (DateTime startUtc, DateTime endUtc) GetYearRangeUtc(DateTime date)
+    {
+        var yearStartLocal = new DateTime(date.Year, 1, 1, 0, 0, 0, DateTimeKind.Local);
+        var yearEndUtc = yearStartLocal.AddYears(1).ToUniversalTime().AddTicks(-1);
+        return (yearStartLocal.ToUniversalTime(), yearEndUtc);
+    }
 }

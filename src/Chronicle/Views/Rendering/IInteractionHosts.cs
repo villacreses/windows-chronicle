@@ -33,6 +33,14 @@ internal interface ICalendarInteractionHost
     void OnMiniMonthPrevMonth();
     void OnMiniMonthNextMonth();
 
+    /// <summary>
+    /// Year View day-cell tap: drill from Year to Month at the tapped day.
+    /// Distinct from <see cref="OnDaySelected"/> because it also switches
+    /// the active view — Year is a top-down overview, its cells always
+    /// mean "take me there," not "focus this day in place."
+    /// </summary>
+    void OnYearDaySelected(DateTime date);
+
     // ── Empty-space activation (creates an event) ─────────────────────
 
     /// <summary>Month View: tap on empty cell space.</summary>

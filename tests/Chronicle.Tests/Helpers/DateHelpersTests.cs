@@ -241,6 +241,40 @@ public class DateHelpersTests
         Assert.Equal(new DateTime(2026, 8, 1), endUtc.AddTicks(1).ToLocalTime().Date);
     }
 
+    [Fact]
+    public void GetYearRangeUtc_SpansTheWholeLocalYear()
+    {
+        // Mid-year anchor: any date in 2026 → range covers Jan 1 2026 through Dec 31 2026.
+        var (startUtc, endUtc) = DateHelpers.GetYearRangeUtc(new DateTime(2026, 6, 15));
+
+        Assert.Equal(DateTimeKind.Utc, startUtc.Kind);
+        Assert.Equal(DateTimeKind.Utc, endUtc.Kind);
+
+        var startLocal = startUtc.ToLocalTime();
+        Assert.Equal(new DateTime(2026, 1, 1), startLocal.Date);
+        Assert.Equal(TimeSpan.Zero, startLocal.TimeOfDay);
+
+        // One tick past the end is local midnight of Jan 1 of the next year —
+        // so the range's last covered local day is Dec 31.
+        var afterEndLocal = endUtc.AddTicks(1).ToLocalTime();
+        Assert.Equal(new DateTime(2027, 1, 1), afterEndLocal.Date);
+        Assert.Equal(TimeSpan.Zero, afterEndLocal.TimeOfDay);
+    }
+
+    [Fact]
+    public void GetYearRangeUtc_UsesDateYear_IgnoresMonthAndDay()
+    {
+        // Dec 31 and Jan 1 anchors both resolve to their own calendar year,
+        // never bleed into the neighboring year.
+        var (startDecUtc, endDecUtc) = DateHelpers.GetYearRangeUtc(new DateTime(2026, 12, 31));
+        Assert.Equal(new DateTime(2026, 1, 1), startDecUtc.ToLocalTime().Date);
+        Assert.Equal(new DateTime(2027, 1, 1), endDecUtc.AddTicks(1).ToLocalTime().Date);
+
+        var (startJanUtc, endJanUtc) = DateHelpers.GetYearRangeUtc(new DateTime(2026, 1, 1));
+        Assert.Equal(new DateTime(2026, 1, 1), startJanUtc.ToLocalTime().Date);
+        Assert.Equal(new DateTime(2027, 1, 1), endJanUtc.AddTicks(1).ToLocalTime().Date);
+    }
+
     // ── Local↔UTC conversions (previously only exercised indirectly) ──────
 
     [Fact]
