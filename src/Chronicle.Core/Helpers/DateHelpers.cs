@@ -148,4 +148,21 @@ internal static class DateHelpers
         var dayEndUtc = dayStartLocal.AddDays(1).ToUniversalTime().AddTicks(-1);
         return (dayStartLocal.ToUniversalTime(), dayEndUtc);
     }
+
+    /// <summary>
+    /// Gets the start (UTC) and end (UTC, inclusive) boundaries of the
+    /// Agenda view range: <paramref name="today"/> through the last day of
+    /// the following month. The range is anchored to a fixed <c>today</c>
+    /// rather than to a paged frame — Agenda scrolls chronologically forward
+    /// from a point, it doesn't page.
+    /// </summary>
+    public static (DateTime startUtc, DateTime endUtc) GetAgendaRangeUtc(DateTime today)
+    {
+        var startLocal = GetLocalDayKey(today);
+        // Last day of (today.Month + 1) = first day of (today.Month + 2) minus one tick.
+        var monthStart = GetMonthStartLocal(startLocal);
+        var endExclusiveLocal = monthStart.AddMonths(2);
+        var endUtc = endExclusiveLocal.ToUniversalTime().AddTicks(-1);
+        return (startLocal.ToUniversalTime(), endUtc);
+    }
 }

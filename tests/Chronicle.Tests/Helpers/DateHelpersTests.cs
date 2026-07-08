@@ -195,6 +195,52 @@ public class DateHelpersTests
         Assert.Equal(TimeSpan.Zero, afterEndLocal.TimeOfDay);
     }
 
+    [Fact]
+    public void GetAgendaRangeUtc_StartsAtTodayMidnight_EndsAtLastDayOfFollowingMonth()
+    {
+        // Mid-month anchor: today = Jun 12 → range covers Jun 12 through Jul 31.
+        var today = new DateTime(2026, 6, 12, 15, 0, 0);
+        var (startUtc, endUtc) = DateHelpers.GetAgendaRangeUtc(today);
+
+        Assert.Equal(DateTimeKind.Utc, startUtc.Kind);
+        Assert.Equal(DateTimeKind.Utc, endUtc.Kind);
+
+        var startLocal = startUtc.ToLocalTime();
+        Assert.Equal(new DateTime(2026, 6, 12), startLocal.Date);
+        Assert.Equal(TimeSpan.Zero, startLocal.TimeOfDay);
+
+        // One tick past the end is local midnight of Aug 1 — so the range's
+        // last-covered local day is Jul 31.
+        var afterEndLocal = endUtc.AddTicks(1).ToLocalTime();
+        Assert.Equal(new DateTime(2026, 8, 1), afterEndLocal.Date);
+        Assert.Equal(TimeSpan.Zero, afterEndLocal.TimeOfDay);
+    }
+
+    [Fact]
+    public void GetAgendaRangeUtc_CrossesYearBoundary()
+    {
+        // Dec 20 → range covers Dec 20 through Jan 31 of the following year.
+        var today = new DateTime(2026, 12, 20, 9, 0, 0);
+        var (startUtc, endUtc) = DateHelpers.GetAgendaRangeUtc(today);
+
+        var startLocal = startUtc.ToLocalTime();
+        Assert.Equal(new DateTime(2026, 12, 20), startLocal.Date);
+
+        var afterEndLocal = endUtc.AddTicks(1).ToLocalTime();
+        Assert.Equal(new DateTime(2027, 2, 1), afterEndLocal.Date);
+    }
+
+    [Fact]
+    public void GetAgendaRangeUtc_FirstOfMonth_CoversWholeMonthPlusNextMonth()
+    {
+        // Jun 1 → Jun 1 through Jul 31, the full month plus the next.
+        var today = new DateTime(2026, 6, 1, 0, 0, 0);
+        var (startUtc, endUtc) = DateHelpers.GetAgendaRangeUtc(today);
+
+        Assert.Equal(new DateTime(2026, 6, 1), startUtc.ToLocalTime().Date);
+        Assert.Equal(new DateTime(2026, 8, 1), endUtc.AddTicks(1).ToLocalTime().Date);
+    }
+
     // ── Local↔UTC conversions (previously only exercised indirectly) ──────
 
     [Fact]

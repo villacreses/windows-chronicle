@@ -316,6 +316,22 @@ Renderers either receive a slice as a parameter or read directly from
 `_eventsByDate`. They do not keep a copy. Cache invalidation remains a
 one-place problem.
 
+### Scroll Offset Is View State
+
+Where a view is scrollable and its user context is encoded in the scroll
+position (Day View's 24-hour timeline, Agenda View's chronological list),
+the `ScrollViewer` instance is held as a persistent field on the
+renderer. Subsequent renders swap only `ScrollViewer.Content` —
+`VerticalOffset` survives event CRUD, calendar visibility toggles, and
+calendar-list mutations.
+
+The rule matters most for views that have no `_selectedDate` fallback.
+Month / Week / Day re-anchor to `_selectedDate` on refresh, so a stray
+scroll reset is recoverable. Agenda has no selected date; its range is
+anchored to today. Recreating its `ScrollViewer` on any refresh would
+silently teleport the user back to today whenever anything changed.
+Treat this as a UX invariant, not a micro-optimization.
+
 ### Local-Time Conversion Is Point-of-Use
 
 `evt.StartTimeUtc.ToLocalTime()` per chip is fine. Pre-converted

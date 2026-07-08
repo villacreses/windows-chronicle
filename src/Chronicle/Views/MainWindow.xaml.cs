@@ -19,7 +19,7 @@ using System.Threading.Tasks;
 namespace Chronicle
 {
     /// <summary>The main content view. Pure UI mode — not navigation state.</summary>
-    internal enum CalendarView { Month, Week, Day }
+    internal enum CalendarView { Month, Week, Day, Agenda }
 
     public sealed partial class MainWindow : Window, ICalendarInteractionHost, ISidebarHost
     {
@@ -33,6 +33,7 @@ namespace Chronicle
         private readonly SelectedDayRenderer _selectedDayRenderer;
         private readonly WeekViewRenderer _weekViewRenderer;
         private readonly DayViewRenderer _dayViewRenderer;
+        private readonly AgendaViewRenderer _agendaViewRenderer;
         private readonly CalendarDialogService _calendarDialogService;
 
         private readonly EventPopover _eventPopover;
@@ -109,6 +110,7 @@ namespace Chronicle
             _selectedDayRenderer = new SelectedDayRenderer(SelectedDayPanel, this);
             _weekViewRenderer = new WeekViewRenderer(WeekViewRoot, this);
             _dayViewRenderer = new DayViewRenderer(DayViewRoot, this);
+            _agendaViewRenderer = new AgendaViewRenderer(AgendaViewRoot, this);
             _calendarDialogService = new CalendarDialogService(
                 _calendarRepository, _eventRepository, () => Content.XamlRoot, ReloadCalendarsAndRefreshAsync);
 
@@ -149,6 +151,7 @@ namespace Chronicle
             MonthViewToggle.Click += (s, e) => SwitchView(CalendarView.Month);
             WeekViewToggle.Click += (s, e) => SwitchView(CalendarView.Week);
             DayViewToggle.Click += (s, e) => SwitchView(CalendarView.Day);
+            AgendaViewToggle.Click += (s, e) => SwitchView(CalendarView.Agenda);
 
             SearchBox.QuerySubmitted += SearchBox_QuerySubmitted;
 
@@ -228,6 +231,9 @@ namespace Chronicle
                 case CalendarView.Day:
                     RenderDayView();
                     break;
+                case CalendarView.Agenda:
+                    RenderAgendaView();
+                    break;
             }
 
             RenderMiniMonth();
@@ -241,8 +247,16 @@ namespace Chronicle
             {
                 CalendarView.Week => FormatWeekRange(_selectedDate),
                 CalendarView.Day => _selectedDate.ToString("dddd, MMMM d, yyyy"),
+                CalendarView.Agenda => "Upcoming",
                 _ => _displayMonth.ToString("MMMM yyyy")
             };
+
+            // Agenda is anchored to today, not a paged frame — Prev/Next
+            // have no meaningful action here. Disabling makes that visible
+            // rather than silently no-op.
+            var pagingEnabled = _currentView != CalendarView.Agenda;
+            PrevMonthButton.IsEnabled = pagingEnabled;
+            NextMonthButton.IsEnabled = pagingEnabled;
         }
 
         private static string FormatWeekRange(DateTime dateInWeek)
@@ -346,6 +360,8 @@ namespace Chronicle
                 view == CalendarView.Week ? Visibility.Visible : Visibility.Collapsed;
             DayViewRoot.Visibility =
                 view == CalendarView.Day ? Visibility.Visible : Visibility.Collapsed;
+            AgendaViewRoot.Visibility =
+                view == CalendarView.Agenda ? Visibility.Visible : Visibility.Collapsed;
 
             await RefreshActiveViewAsync();
         }
@@ -355,6 +371,7 @@ namespace Chronicle
             MonthViewToggle.IsChecked = _currentView == CalendarView.Month;
             WeekViewToggle.IsChecked = _currentView == CalendarView.Week;
             DayViewToggle.IsChecked = _currentView == CalendarView.Day;
+            AgendaViewToggle.IsChecked = _currentView == CalendarView.Agenda;
         }
 
         // ── Sidebar ───────────────────────────────────────────────────────────
@@ -508,6 +525,7 @@ namespace Chronicle
         {
             CalendarView.Week => WeekViewRoot,
             CalendarView.Day => DayViewRoot,
+            CalendarView.Agenda => AgendaViewRoot,
             _ => MonthViewRoot
         };
 
@@ -713,6 +731,9 @@ namespace Chronicle
                 case CalendarView.Day:
                     RenderDayView();
                     break;
+                case CalendarView.Agenda:
+                    RenderAgendaView();
+                    break;
             }
             RenderSelectedDay();
         }
@@ -881,6 +902,7 @@ namespace Chronicle
             {
                 CalendarView.Week => DateHelpers.GetWeekRangeUtc(_selectedDate),
                 CalendarView.Day => DateHelpers.GetDayRangeUtc(_selectedDate),
+                CalendarView.Agenda => DateHelpers.GetAgendaRangeUtc(DateTime.Now),
                 _ => DateHelpers.GetMonthRangeUtc(_displayMonth)
             };
 
@@ -1083,6 +1105,16 @@ namespace Chronicle
             var dayKey = DateHelpers.GetLocalDayKey(_selectedDate);
             var events = _eventsByDate.GetValueOrDefault(dayKey) ?? new List<Event>();
             _dayViewRenderer.Render(_selectedDate, events, _allCalendars);
+        }
+
+        // ── Agenda view rendering ─────────────────────────────────────────────
+
+        private void RenderAgendaView()
+        {
+            var (startUtc, endUtc) = DateHelpers.GetAgendaRangeUtc(DateTime.Now);
+            var startLocal = startUtc.ToLocalTime();
+            var endLocal = endUtc.ToLocalTime();
+            _agendaViewRenderer.Render(startLocal, endLocal, _eventsByDate, _allCalendars);
         }
 
         // ── ICalendarInteractionHost: event interaction ───────────────────────
