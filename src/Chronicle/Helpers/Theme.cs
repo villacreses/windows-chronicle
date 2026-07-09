@@ -29,6 +29,16 @@ internal static class Theme
     public static readonly Windows.UI.Color AccentSoft =
         new() { A = 26, R = 0x2E, G = 0x9B, B = 0x7C };
 
+    // ── Density ramp (Year View day-cell tint) ────────────────────────────
+    // Three tiers of accent-with-opacity for the 1–2 / 3–5 / 6+ event
+    // buckets. Kept next to AccentSoft so the whole ramp is one place.
+    public static readonly Windows.UI.Color AccentDensity1 =
+        new() { A = 38,  R = 0x2E, G = 0x9B, B = 0x7C };
+    public static readonly Windows.UI.Color AccentDensity2 =
+        new() { A = 90,  R = 0x2E, G = 0x9B, B = 0x7C };
+    public static readonly Windows.UI.Color AccentDensity3 =
+        new() { A = 153, R = 0x2E, G = 0x9B, B = 0x7C };
+
     // ── Neutral surfaces (Mica-dark) ──────────────────────────────────────
     public static readonly Windows.UI.Color Window = Rgb(0x1C, 0x1D, 0x20);
     public static readonly Windows.UI.Color Sidebar = Rgb(0x23, 0x24, 0x27);

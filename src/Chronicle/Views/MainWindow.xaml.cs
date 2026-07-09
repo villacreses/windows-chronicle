@@ -19,7 +19,7 @@ using System.Threading.Tasks;
 namespace Chronicle
 {
     /// <summary>The main content view. Pure UI mode — not navigation state.</summary>
-    internal enum CalendarView { Month, Week, Day }
+    internal enum CalendarView { Month, Week, Day, Agenda, Year }
 
     public sealed partial class MainWindow : Window, ICalendarInteractionHost, ISidebarHost
     {
@@ -33,6 +33,8 @@ namespace Chronicle
         private readonly SelectedDayRenderer _selectedDayRenderer;
         private readonly WeekViewRenderer _weekViewRenderer;
         private readonly DayViewRenderer _dayViewRenderer;
+        private readonly AgendaViewRenderer _agendaViewRenderer;
+        private readonly YearViewRenderer _yearViewRenderer;
         private readonly CalendarDialogService _calendarDialogService;
 
         private readonly EventPopover _eventPopover;
@@ -109,6 +111,8 @@ namespace Chronicle
             _selectedDayRenderer = new SelectedDayRenderer(SelectedDayPanel, this);
             _weekViewRenderer = new WeekViewRenderer(WeekViewRoot, this);
             _dayViewRenderer = new DayViewRenderer(DayViewRoot, this);
+            _agendaViewRenderer = new AgendaViewRenderer(AgendaViewRoot, this);
+            _yearViewRenderer = new YearViewRenderer(YearViewRoot, this);
             _calendarDialogService = new CalendarDialogService(
                 _calendarRepository, _eventRepository, () => Content.XamlRoot, ReloadCalendarsAndRefreshAsync);
 
@@ -149,6 +153,8 @@ namespace Chronicle
             MonthViewToggle.Click += (s, e) => SwitchView(CalendarView.Month);
             WeekViewToggle.Click += (s, e) => SwitchView(CalendarView.Week);
             DayViewToggle.Click += (s, e) => SwitchView(CalendarView.Day);
+            AgendaViewToggle.Click += (s, e) => SwitchView(CalendarView.Agenda);
+            YearViewToggle.Click += (s, e) => SwitchView(CalendarView.Year);
 
             SearchBox.QuerySubmitted += SearchBox_QuerySubmitted;
 
@@ -228,6 +234,12 @@ namespace Chronicle
                 case CalendarView.Day:
                     RenderDayView();
                     break;
+                case CalendarView.Agenda:
+                    RenderAgendaView();
+                    break;
+                case CalendarView.Year:
+                    RenderYearView();
+                    break;
             }
 
             RenderMiniMonth();
@@ -241,8 +253,17 @@ namespace Chronicle
             {
                 CalendarView.Week => FormatWeekRange(_selectedDate),
                 CalendarView.Day => _selectedDate.ToString("dddd, MMMM d, yyyy"),
+                CalendarView.Agenda => "Upcoming",
+                CalendarView.Year => _displayMonth.Year.ToString(),
                 _ => _displayMonth.ToString("MMMM yyyy")
             };
+
+            // Agenda is anchored to today, not a paged frame — Prev/Next
+            // have no meaningful action here. Disabling makes that visible
+            // rather than silently no-op.
+            var pagingEnabled = _currentView != CalendarView.Agenda;
+            PrevMonthButton.IsEnabled = pagingEnabled;
+            NextMonthButton.IsEnabled = pagingEnabled;
         }
 
         private static string FormatWeekRange(DateTime dateInWeek)
@@ -287,6 +308,9 @@ namespace Chronicle
                     break;
                 case CalendarView.Day:
                     StepDay(direction);
+                    break;
+                case CalendarView.Year:
+                    _displayMonth = _displayMonth.AddYears(direction);
                     break;
                 default:
                     _displayMonth = _displayMonth.AddMonths(direction);
@@ -346,6 +370,10 @@ namespace Chronicle
                 view == CalendarView.Week ? Visibility.Visible : Visibility.Collapsed;
             DayViewRoot.Visibility =
                 view == CalendarView.Day ? Visibility.Visible : Visibility.Collapsed;
+            AgendaViewRoot.Visibility =
+                view == CalendarView.Agenda ? Visibility.Visible : Visibility.Collapsed;
+            YearViewRoot.Visibility =
+                view == CalendarView.Year ? Visibility.Visible : Visibility.Collapsed;
 
             await RefreshActiveViewAsync();
         }
@@ -355,6 +383,8 @@ namespace Chronicle
             MonthViewToggle.IsChecked = _currentView == CalendarView.Month;
             WeekViewToggle.IsChecked = _currentView == CalendarView.Week;
             DayViewToggle.IsChecked = _currentView == CalendarView.Day;
+            AgendaViewToggle.IsChecked = _currentView == CalendarView.Agenda;
+            YearViewToggle.IsChecked = _currentView == CalendarView.Year;
         }
 
         // ── Sidebar ───────────────────────────────────────────────────────────
@@ -508,6 +538,8 @@ namespace Chronicle
         {
             CalendarView.Week => WeekViewRoot,
             CalendarView.Day => DayViewRoot,
+            CalendarView.Agenda => AgendaViewRoot,
+            CalendarView.Year => YearViewRoot,
             _ => MonthViewRoot
         };
 
@@ -713,6 +745,12 @@ namespace Chronicle
                 case CalendarView.Day:
                     RenderDayView();
                     break;
+                case CalendarView.Agenda:
+                    RenderAgendaView();
+                    break;
+                case CalendarView.Year:
+                    RenderYearView();
+                    break;
             }
             RenderSelectedDay();
         }
@@ -881,6 +919,8 @@ namespace Chronicle
             {
                 CalendarView.Week => DateHelpers.GetWeekRangeUtc(_selectedDate),
                 CalendarView.Day => DateHelpers.GetDayRangeUtc(_selectedDate),
+                CalendarView.Agenda => DateHelpers.GetAgendaRangeUtc(DateTime.Now),
+                CalendarView.Year => DateHelpers.GetYearRangeUtc(_displayMonth),
                 _ => DateHelpers.GetMonthRangeUtc(_displayMonth)
             };
 
@@ -1083,6 +1123,39 @@ namespace Chronicle
             var dayKey = DateHelpers.GetLocalDayKey(_selectedDate);
             var events = _eventsByDate.GetValueOrDefault(dayKey) ?? new List<Event>();
             _dayViewRenderer.Render(_selectedDate, events, _allCalendars);
+        }
+
+        // ── Agenda view rendering ─────────────────────────────────────────────
+
+        private void RenderAgendaView()
+        {
+            var (startUtc, endUtc) = DateHelpers.GetAgendaRangeUtc(DateTime.Now);
+            var startLocal = startUtc.ToLocalTime();
+            var endLocal = endUtc.ToLocalTime();
+            _agendaViewRenderer.Render(startLocal, endLocal, _eventsByDate, _allCalendars);
+        }
+
+        // ── Year view rendering ───────────────────────────────────────────────
+
+        private void RenderYearView()
+        {
+            _yearViewRenderer.Render(_displayMonth.Year, _selectedDate, _eventsByDate);
+        }
+
+        /// <summary>
+        /// Year View day-cell tap: drill from Year into Month at the tapped
+        /// day. Sets both <see cref="_selectedDate"/> and
+        /// <see cref="_displayMonth"/>, switches to Month view, and refreshes.
+        /// Year always crosses the current loaded range for Month (Year loads
+        /// the whole calendar year), so the switch always issues one DB pass —
+        /// no clever short-circuit here.
+        /// </summary>
+        public async void OnYearDaySelected(DateTime date)
+        {
+            _selectedDate = DateHelpers.GetLocalDayKey(date);
+            _displayMonth = DateHelpers.GetMonthStartLocal(_selectedDate);
+            SwitchView(CalendarView.Month);
+            await Task.Yield();
         }
 
         // ── ICalendarInteractionHost: event interaction ───────────────────────

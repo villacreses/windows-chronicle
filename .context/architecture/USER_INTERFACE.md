@@ -167,7 +167,11 @@ The user can change the focused date or loaded range through several
 entry points. Each maps onto one of the two patterns above
 (incremental `SelectDate` or full `RefreshActiveViewAsync`):
 
-**Toolbar Previous/Next** is view-aware via `StepPeriod`:
+**Toolbar Previous/Next** is view-aware via `StepPeriod`. The rule is
+that navigation advances by the primary temporal unit of the active
+view — days step by days, weeks by weeks, months by months, years by
+years. Views without a temporal unit disable the arrows so the
+non-action is visible rather than a silent no-op.
 
 - **Month view** — subtracts / adds one month to `_displayMonth`,
   then calls `RefreshActiveViewAsync`. Does not change
@@ -177,6 +181,14 @@ entry points. Each maps onto one of the two patterns above
   the week and moving the selected day are the same operation.
 - **Day view** — `StepDay(±1)` moves `_selectedDate` by one day and
   re-anchors `_displayMonth`. Day View *is* the selected day.
+- **Year view** — steps `_displayMonth` by ±12 months.
+  `_selectedDate` is not touched; the highlight follows the user
+  across years only if they drill down and back.
+- **Agenda view** — arrows are disabled. Agenda is anchored to today
+  and shows a fixed "upcoming" horizon; there is no temporal unit to
+  page. `UpdateHeader` toggles `PrevMonthButton.IsEnabled` /
+  `NextMonthButton.IsEnabled` so the disabled state is coincident
+  with entering Agenda.
 
 **Today** (`TodayButton_Click`) sets `_displayMonth` to the first day
 of today's month, sets `_selectedDate` to today's local day key, then
@@ -315,6 +327,22 @@ Reserve full rebuild for range changes (month / week / day moved).
 Renderers either receive a slice as a parameter or read directly from
 `_eventsByDate`. They do not keep a copy. Cache invalidation remains a
 one-place problem.
+
+### Scroll Offset Is View State
+
+Where a view is scrollable and its user context is encoded in the scroll
+position (Day View's 24-hour timeline, Agenda View's chronological list),
+the `ScrollViewer` instance is held as a persistent field on the
+renderer. Subsequent renders swap only `ScrollViewer.Content` —
+`VerticalOffset` survives event CRUD, calendar visibility toggles, and
+calendar-list mutations.
+
+The rule matters most for views that have no `_selectedDate` fallback.
+Month / Week / Day re-anchor to `_selectedDate` on refresh, so a stray
+scroll reset is recoverable. Agenda has no selected date; its range is
+anchored to today. Recreating its `ScrollViewer` on any refresh would
+silently teleport the user back to today whenever anything changed.
+Treat this as a UX invariant, not a micro-optimization.
 
 ### Local-Time Conversion Is Point-of-Use
 
