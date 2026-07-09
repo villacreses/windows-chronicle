@@ -46,6 +46,45 @@ milestone in `EXECUTION_PLAN.md`.)
 
 ## Refactors / Tech Debt
 
+- Year View render latency — first investigation done; findings below.
+  The Year view reaches ~450 ms time-to-idle on a warm path (nearly
+  empty database), a clear outlier: every other view lands in the
+  ~50–200 ms range. A profiling pass (temporary instrumentation, since
+  removed) established what is *not* responsible, which is the valuable
+  part:
+    - **Data and projection are ~0 ms.** `EventRepository` /
+      SQLite and `EventProjection` contribute effectively nothing on
+      the Year path — the range is cached and the grouping is trivial.
+      The cost is entirely in the WinUI rendering layer.
+    - **Control-template weight is NOT the cause.** Replacing the day
+      cell's default `Button` template with a stripped
+      `Border`+`ContentPresenter` template (focus / keyboard /
+      automation all preserved) produced no meaningful change
+      (~448 ms vs ~443 ms). The standard "give it a lighter template"
+      fix does not apply here.
+    - **The `Button` *object* is ~half the cost.** Swapping `Button`
+      for a bare `Border`+`TextBlock`+`Tapped` roughly halved
+      time-to-idle (~443 ms → ~231 ms) — but sacrificed keyboard
+      navigation and accessibility (no focus, no automation peer),
+      and was *still* materially slower than the other views. Not a
+      shippable trade.
+    - **Remaining hypothesis: raw framework-element count / layout.**
+      Even the lightweight-`Border` variant (~231 ms) builds ~1,600
+      elements (504 day cells × 2, plus twelve nested star-sized
+      `Grid`s). The dominant residual cost is *how many elements
+      exist*, not *what type they are*.
+  Promising direction if revisited (design-overhaul phase, not now):
+  reduce the framework-element count rather than micro-optimizing the
+  per-cell control — e.g. custom rendering / composition-layer draw of
+  the day grid with pointer hit-testing, so a mini-month is a handful
+  of visuals instead of ~130 elements. This is the "504 interactive
+  *cells*, not 504 interactive *controls*" reframe. Benchmark instinct:
+  a native year view that feels instant is almost certainly not
+  instantiating ~1,600 XAML elements. Deliberately deferred — the
+  current `Button` implementation is correct and fully accessible, and
+  the real fix is a rendering-model change that belongs with the
+  design overhaul.
+
 - Search backend upgrade (FTS5 or equivalent) — reach goal, not a
   roadmap item. The current `EventRepository.SearchCandidatesAsync`
   implementation uses SQLite `LIKE` on Title / Description, unioned
