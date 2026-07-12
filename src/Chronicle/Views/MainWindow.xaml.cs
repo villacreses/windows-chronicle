@@ -208,8 +208,7 @@ namespace Chronicle
                 _calendarVisibility.Remove(staleId);
 
             RenderSidebar();
-            InvalidateLoadedEvents();
-            await RefreshActiveViewAsync();
+            await AfterDataMutationAsync();
         }
 
         // ── Full refresh (single re-render entry point) ───────────────────────
@@ -669,8 +668,7 @@ namespace Chronicle
                 // schedules a toast here.
                 await _reminderRepository.SetForEventAsync(
                     created.Event.Id, created.Reminders);
-                InvalidateLoadedEvents();
-                await RefreshActiveViewAsync();
+                await AfterDataMutationAsync();
             }
             else
             {
@@ -862,8 +860,7 @@ namespace Chronicle
             // Replace the event's whole reminder set (0..1 from the editor).
             await _reminderRepository.SetForEventAsync(
                 edited.Event.Id, edited.Reminders);
-            InvalidateLoadedEvents();
-            await RefreshActiveViewAsync();
+            await AfterDataMutationAsync();
         }
 
         /// <summary>
@@ -880,8 +877,7 @@ namespace Chronicle
             var master = await _eventRepository.GetByIdAsync(masterId);
             if (master is null)
             {
-                InvalidateLoadedEvents();
-                await RefreshActiveViewAsync();
+                await AfterDataMutationAsync();
                 return;
             }
 
@@ -917,8 +913,7 @@ namespace Chronicle
                 IsAllDay: edited.IsAllDay);
 
             await _overrideRepository.UpsertAsync(target, fields);
-            InvalidateLoadedEvents();
-            await RefreshActiveViewAsync();
+            await AfterDataMutationAsync();
         }
 
         // ── Event loading ─────────────────────────────────────────────────────
@@ -1011,6 +1006,26 @@ namespace Chronicle
         {
             _loadedRangeStartUtc = DateTime.MaxValue;
             _loadedRangeEndUtc = DateTime.MinValue;
+        }
+
+        /// <summary>
+        /// The single "persisted calendar data changed" chokepoint. Every
+        /// event-mutation path (create, edit-master, edit-occurrence, delete,
+        /// skip-occurrence) routes through here, and the calendar-mutation
+        /// path funnels into it via <see cref="ReloadCalendarsAndRefreshAsync"/>.
+        /// Consolidating the post-mutation behavior in one place keeps the
+        /// invalidate-then-refresh pair from drifting across handlers, and
+        /// gives later cross-cutting concerns (e.g. reminder-schedule
+        /// reconciliation) a single hook rather than N scattered call sites.
+        ///
+        /// Pure navigation (view switch, date selection) deliberately does
+        /// NOT come through here — it calls <see cref="RefreshActiveViewAsync"/>
+        /// without invalidating, because the data hasn't changed.
+        /// </summary>
+        private async Task AfterDataMutationAsync()
+        {
+            InvalidateLoadedEvents();
+            await RefreshActiveViewAsync();
         }
 
         // ── Search ────────────────────────────────────────────────────────────
@@ -1223,8 +1238,7 @@ namespace Chronicle
                 else
                     await _eventRepository.DeleteAsync(evt.Id);
 
-                InvalidateLoadedEvents();
-                await RefreshActiveViewAsync();
+                await AfterDataMutationAsync();
             }
             catch (Exception ex)
             {
