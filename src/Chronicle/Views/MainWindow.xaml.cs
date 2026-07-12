@@ -369,6 +369,19 @@ namespace Chronicle
                 return;
             }
 
+            ApplyViewMode(view);
+            await RefreshActiveViewAsync();
+        }
+
+        /// <summary>
+        /// Sets the active view mode synchronously — state, toggle buttons,
+        /// and root visibilities — without triggering a refresh. Callers that
+        /// need to await the subsequent load (e.g. the reminder deep-link)
+        /// call this then <see cref="RefreshActiveViewAsync"/> directly, since
+        /// <see cref="SwitchView"/> is fire-and-forget (async void).
+        /// </summary>
+        private void ApplyViewMode(CalendarView view)
+        {
             _currentView = view;
             UpdateViewToggles();
 
@@ -382,8 +395,6 @@ namespace Chronicle
                 view == CalendarView.Agenda ? Visibility.Visible : Visibility.Collapsed;
             YearViewRoot.Visibility =
                 view == CalendarView.Year ? Visibility.Visible : Visibility.Collapsed;
-
-            await RefreshActiveViewAsync();
         }
 
         private void UpdateViewToggles()
@@ -1041,6 +1052,69 @@ namespace Chronicle
             // delays the visible update. Other future consumers (provider-sync
             // bookkeeping, search indexing) would hang off the same event.
             await ReconcileRemindersAsync();
+        }
+
+        // ── Reminder activation (deep-link from a clicked toast) ──────────────
+
+        /// <summary>
+        /// Translates a clicked reminder toast into the existing navigation
+        /// model: go to the event's day and open it. Deliberately thin — it
+        /// knows nothing of scheduling, reminders, or recurrence expansion.
+        /// The target date comes straight from the <see cref="EventRef"/>
+        /// (an occurrence's rule-walk anchor, or a loaded master's start), and
+        /// the event to open is found by identity against the projection the
+        /// normal load pipeline already expanded — activation never expands
+        /// anything itself.
+        ///
+        /// Best-effort by design: if the event was deleted since the toast was
+        /// scheduled, the user simply lands on the day with nothing to open.
+        /// </summary>
+        public async Task DeepLinkToReminderAsync(EventRef reminderRef)
+        {
+            DateTime targetDate;
+            Guid eventId;
+            DateTime? anchorUtc = null;
+
+            switch (reminderRef)
+            {
+                case EventRef.Occurrence occ:
+                    eventId = occ.SeriesId;
+                    anchorUtc = occ.AnchorUtc;
+                    targetDate = DateHelpers.GetEventDayKey(occ.AnchorUtc);
+                    break;
+
+                case EventRef.Master master:
+                    var evt = await _eventRepository.GetByIdAsync(master.Id);
+                    if (evt is null)
+                        return; // deleted since scheduling — nothing to navigate to.
+                    eventId = master.Id;
+                    targetDate = DateHelpers.GetEventDayKey(evt.StartTimeUtc);
+                    break;
+
+                default:
+                    return;
+            }
+
+            // Navigate with the existing model, awaiting the load so the day's
+            // events are in the projection before we look for the target.
+            _selectedDate = targetDate;
+            _displayMonth = DateHelpers.GetMonthStartLocal(targetDate);
+            ApplyViewMode(CalendarView.Day);
+            await RefreshActiveViewAsync();
+
+            // Identity match against the already-expanded projection — an
+            // occurrence matches on (Id + anchor), a master/standalone on Id
+            // with no anchor.
+            var dayEvents = _eventsByDate.GetValueOrDefault(targetDate) ?? new List<Event>();
+            var match = dayEvents.FirstOrDefault(e =>
+                e.Id == eventId
+                && (anchorUtc is null ? !e.IsOccurrence : e.SeriesAnchorUtc == anchorUtc));
+
+            if (match is null)
+                return;
+
+            var anchor = await FindChipForEventAsync(EventKey.For(match)) ?? FallbackAnchor;
+            OnEventClicked(match, anchor);
         }
 
         // ── Reminder schedule reconciliation ──────────────────────────────────
