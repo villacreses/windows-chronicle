@@ -18,7 +18,7 @@ model.**
 | Unit | Scope | Status |
 |------|-------|--------|
 | 1 | `Reminder` child entity + `Reminders` table + repository + `EventProjection.ReminderSchedule` + `ReminderOccurrence` | **landed** |
-| 2 | "Remind me" picker in `EventEditPopover` (one reminder, master path) | rebuilding |
+| 2 | "Remind me" picker in `EventEditPopover` (one reminder, master path) | **landed** |
 | 3 | `IReminderScheduler` seam + toast adapter + reconciler wired to launch/CRUD | planned |
 | 4 | Custom `Main` single-instancing + classic toast activation → deep-link | planned |
 | 5 | Cross-doc updates (DECISIONS / DATA_MODEL / AGENT_ONBOARDING) | planned |
@@ -220,6 +220,50 @@ starts just after the window but whose reminder fires inside it is not
 missed. The horizon is a tunable **policy** (default ~60 days), not an
 architectural invariant.
 
+## Reminder identity across saves
+
+`Reminder` has identity, so an event save must not needlessly churn it. The
+editor's rule:
+
+- **Offset unchanged → identity preserved.** Editing only an event's title
+  (or any non-reminder field) and saving keeps the existing reminder's `Id`.
+  A title-only edit does not mint a new reminder entity.
+- **Offset changed → new identity.** A changed offset is a new intent, so it
+  gets a new `Id`.
+
+This is a **deliberate modeling decision**, not an artifact of the
+`SetForEventAsync` replace-the-set write. `SetForEventAsync` still deletes
+and re-inserts the row (the write is a set-replace), but the editor carries
+the prior `Id` forward when the offset is unchanged, so the *entity's*
+identity is stable across unrelated edits even though the *row* is rewritten.
+
+**Deferred:** whether an offset *change* should mutate the existing reminder
+in place (preserving `Id`) rather than mint a new one. This becomes
+load-bearing only when something external keys on reminder identity —
+specifically Stage 2's `ReminderState` (snooze/dismiss). Until then, "changed
+offset = new identity" is correct and simplest: a snooze set against an
+old offset should not silently apply to a re-timed reminder anyway. Revisit
+when Stage 2 lands.
+
+## Editor scope vs. domain capability
+
+The editor and the domain are **intentionally different**, and the gap is
+staging, not a constraint:
+
+| | Editor (MVP) | Domain |
+|--|--------------|--------|
+| Count | zero or one reminder | a collection (0..N) |
+| Value | fixed presets (10 min, 1 hour, 1 day, 2 weeks, …) | any `(OffsetQuantity, OffsetUnit)` |
+
+The single-reminder preset dropdown is a **UI limitation, not a domain
+constraint**. The persistence model, the projection, and the scheduler all
+already handle N reminders per event with arbitrary expressed offsets (the
+projection tests exercise the multi-reminder case directly). The editor can
+grow into an "Add reminder" collection UI — repeated `(quantity, unit)` rows
+— with **no persistence or projection redesign**: only the popover's
+read/seed of the reminder set changes. Nobody should read the dropdown as
+evidence that Chronicle events carry at most one reminder.
+
 ## Reconciliation contract [planned, unit 3]
 
 The OS schedule is a **disposable cache** of the `ReminderOccurrence`
@@ -318,12 +362,10 @@ MVP; stated so it is a deliberate position, not a surprise.
 
 ## Deliberate deferrals
 
-- **Editor exposes one reminder; the domain supports many.** The
-  persistence model is a collection (0..N reminders per event); the MVP
-  editor shows a single reminder. This is deliberate: the domain is
-  faithful to real calendars (multiple reminders are table stakes), while
-  the UI stays minimal. Adding a second reminder later is a UI change, not
-  a model change.
+- **Editor exposes one reminder; the domain supports many.** See "Editor
+  scope vs. domain capability" above — the single-reminder dropdown is a UI
+  limitation, not a domain constraint, and growing it is a UI change with no
+  persistence or projection redesign.
 - **No snooze / dismiss.** Stage 1 is fire-only. Snooze/dismiss (a
   `ReminderState` table keyed on `(EventRef.Occurrence, ReminderId)`,
   interactive toast buttons, background activation) is Stage 2, likely a

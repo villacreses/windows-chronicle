@@ -26,6 +26,7 @@ namespace Chronicle
         private readonly EventRepository _eventRepository = new();
         private readonly CalendarRepository _calendarRepository = new();
         private readonly OverrideRepository _overrideRepository = new();
+        private readonly ReminderRepository _reminderRepository = new();
 
         private readonly SidebarRenderer _sidebarRenderer;
         private readonly CalendarGridRenderer _calendarGridRenderer;
@@ -648,7 +649,7 @@ namespace Chronicle
             var naturalAnchor = await FindChipForEventAsync(EventKey.For(draft)) ?? ActiveViewRoot;
             var (anchor, placement) = ResolvePopoverAnchor(naturalAnchor);
 
-            Event? created;
+            EventEditResult? created;
             try
             {
                 created = await EventEditPopover.ShowCreateEventAsync(
@@ -661,7 +662,13 @@ namespace Chronicle
 
             if (created is not null)
             {
-                await _eventRepository.InsertAsync(created);
+                await _eventRepository.InsertAsync(created.Event);
+                // Reminders are a child collection of the event aggregate;
+                // persisted separately after the event row exists (FK). The
+                // scheduler reconciles off this state in unit 3 — nothing
+                // schedules a toast here.
+                await _reminderRepository.SetForEventAsync(
+                    created.Event.Id, created.Reminders);
                 InvalidateLoadedEvents();
                 await RefreshActiveViewAsync();
             }
@@ -842,12 +849,19 @@ namespace Chronicle
             FrameworkElement anchor,
             FlyoutPlacementMode placement)
         {
+            // Reminders are a side collection — load them to seed the picker,
+            // since the Event does not carry them.
+            var existingReminders = await _reminderRepository.GetForEventAsync(master.Id);
+
             var edited = await EventEditPopover.ShowEditEventAsync(
-                anchor, master, _allCalendars, placement);
+                anchor, master, existingReminders, _allCalendars, placement);
             if (edited is null)
                 return;
 
-            await _eventRepository.UpdateAsync(edited);
+            await _eventRepository.UpdateAsync(edited.Event);
+            // Replace the event's whole reminder set (0..1 from the editor).
+            await _reminderRepository.SetForEventAsync(
+                edited.Event.Id, edited.Reminders);
             InvalidateLoadedEvents();
             await RefreshActiveViewAsync();
         }
