@@ -17,7 +17,7 @@ model.**
 
 | Unit | Scope | Status |
 |------|-------|--------|
-| 1 | `Reminder` child entity + `Reminders` table + repository + `EventProjection.ReminderSchedule` + `ReminderOccurrence` | rebuilding |
+| 1 | `Reminder` child entity + `Reminders` table + repository + `EventProjection.ReminderSchedule` + `ReminderOccurrence` | **landed** |
 | 2 | "Remind me" picker in `EventEditPopover` (one reminder, master path) | rebuilding |
 | 3 | `IReminderScheduler` seam + toast adapter + reconciler wired to launch/CRUD | planned |
 | 4 | Custom `Main` single-instancing + classic toast activation → deep-link | planned |
@@ -56,6 +56,18 @@ Windows scheduled toasts       (disposable cache in one reserved OS group)
         │  user clicks a toast                        [planned, unit 4]
         ▼
 classic activation → decode EventRef → focus window + open the event
+```
+
+**Notifications are not a special subsystem — they are another projection
+over the calendar model.** Expanded occurrences fan out to every consumer;
+the reminder projection is one branch among peers:
+
+```
+Expanded occurrences
+        │
+        ├── UI projections        (_eventsByDate day-grouping, flat search list)
+        ├── Reminder projection   (ReminderSchedule → ReminderOccurrence)
+        └── (future consumers)
 ```
 
 Reminders are the **third projection output shape** — after the
@@ -167,12 +179,24 @@ cascade `EventOverrides` — the established pattern.
 
 ## The projection: `ReminderSchedule` → `ReminderOccurrence`
 
+The reminder projection is the **Cartesian expansion of occurrences with
+their event's reminder definitions**:
+
+```
+Occurrence  ×  Reminder  =  ReminderOccurrence
+```
+
+One occurrence with two reminders yields two intents; a three-occurrence
+window of a series with one reminder yields three. This is why toast
+identity is `(EventRef, ReminderId)` rather than `EventRef` alone — each
+intent is one cell of the product, not one event.
+
 `EventProjection.ReminderSchedule(expandedEvents, remindersByEventId,
-windowStartUtc, windowEndUtc)` maps expanded events + their reminders to the
-notifications that fire within a UTC window. For each occurrence, for each
-of its reminders, it derives `FireTimeUtc = StartTimeUtc − reminder
-offset`, keeps those in `[windowStart, windowEnd]`, and emits them ordered
-by fire time (then title). Pure — no DB, no platform calls.
+windowStartUtc, windowEndUtc)` computes that product within a UTC window.
+For each occurrence, for each of its reminders, it derives
+`FireTimeUtc = StartTimeUtc − reminder offset`, keeps those in
+`[windowStart, windowEnd]`, and emits them ordered by fire time (then
+title). Pure — no DB, no platform calls.
 
 ```
 ReminderOccurrence { EventRef Ref; Guid ReminderId; DateTime FireTimeUtc;

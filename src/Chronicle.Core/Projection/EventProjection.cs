@@ -209,6 +209,100 @@ internal static class EventProjection
     }
 
     /// <summary>
+    /// Buckets a flat reminder list by <c>EventId</c> so the reminder
+    /// schedule can do an O(1) lookup per occurrence. Mirrors
+    /// <see cref="GroupOverridesBySeries"/>: events without reminders are
+    /// absent from the dictionary, and absence means "no reminders."
+    /// </summary>
+    public static Dictionary<Guid, IReadOnlyList<Reminder>> GroupRemindersByEvent(
+        IReadOnlyList<Reminder> reminders)
+    {
+        if (reminders.Count == 0)
+            return new Dictionary<Guid, IReadOnlyList<Reminder>>();
+
+        var result = new Dictionary<Guid, List<Reminder>>();
+        foreach (var reminder in reminders)
+        {
+            if (!result.TryGetValue(reminder.EventId, out var bucket))
+            {
+                bucket = new List<Reminder>();
+                result[reminder.EventId] = bucket;
+            }
+            bucket.Add(reminder);
+        }
+
+        var typed = new Dictionary<Guid, IReadOnlyList<Reminder>>(result.Count);
+        foreach (var (k, v) in result)
+            typed[k] = v;
+        return typed;
+    }
+
+    /// <summary>
+    /// Maps expanded events + their reminders to the notification intents
+    /// that fire within a UTC window — the third projection output shape
+    /// (alongside the day-grouped render cache and the flat search list),
+    /// consumed by the notification reconciler rather than a renderer.
+    ///
+    /// For each occurrence, for each of its reminders, the fire time is
+    /// derived (<c>StartTimeUtc − reminder offset</c>); intents whose fire
+    /// time falls in <c>[windowStartUtc, windowEndUtc]</c> are emitted,
+    /// ordered by fire time (then title, then reminder id) for a
+    /// deterministic schedule. Pure — no DB, no platform calls.
+    ///
+    /// <para>Reminders are looked up by <c>EventId</c>. Because an expanded
+    /// occurrence carries its master's <c>Id</c>, occurrences inherit the
+    /// series' reminders through this join with no expander involvement —
+    /// each occurrence's reminders fire relative to its own start.</para>
+    ///
+    /// <para>The caller expands events over a range padded past
+    /// <paramref name="windowEndUtc"/> by the largest reminder offset in
+    /// use, so an event starting just after the window whose reminder fires
+    /// inside it is not missed.</para>
+    /// </summary>
+    public static List<ReminderOccurrence> ReminderSchedule(
+        IReadOnlyList<Event> expandedEvents,
+        IReadOnlyDictionary<Guid, IReadOnlyList<Reminder>> remindersByEventId,
+        DateTime windowStartUtc,
+        DateTime windowEndUtc)
+    {
+        var result = new List<ReminderOccurrence>();
+
+        foreach (var evt in expandedEvents)
+        {
+            var reminders = remindersByEventId.GetValueOrDefault(evt.Id);
+            if (reminders is null)
+                continue;
+
+            foreach (var reminder in reminders)
+            {
+                var fireTimeUtc = evt.StartTimeUtc.AddMinutes(-reminder.OffsetMinutes);
+                if (fireTimeUtc < windowStartUtc || fireTimeUtc > windowEndUtc)
+                    continue;
+
+                result.Add(new ReminderOccurrence(
+                    EventRef.From(evt),
+                    reminder.Id,
+                    fireTimeUtc,
+                    evt.StartTimeUtc,
+                    evt.Title));
+            }
+        }
+
+        result.Sort(CompareByFireThenTitleThenReminder);
+        return result;
+    }
+
+    private static int CompareByFireThenTitleThenReminder(
+        ReminderOccurrence a, ReminderOccurrence b)
+    {
+        var byFire = a.FireTimeUtc.CompareTo(b.FireTimeUtc);
+        if (byFire != 0) return byFire;
+        var byTitle = string.Compare(a.Title, b.Title, StringComparison.OrdinalIgnoreCase);
+        if (byTitle != 0) return byTitle;
+        return a.ReminderId.CompareTo(b.ReminderId);
+    }
+
+    /// <summary>
     /// True when the cached (loaded) UTC range already covers the requested UTC
     /// range, so the load pipeline can skip the DB query. View switches that
     /// stay inside the loaded range (Month → Week → Day in place) short-circuit

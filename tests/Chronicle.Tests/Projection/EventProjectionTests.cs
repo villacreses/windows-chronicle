@@ -469,4 +469,207 @@ public sealed class EventProjectionTests
         var day = Assert.Single(result.Values);
         Assert.Equal(new[] { allDay, timed }, day);
     }
+
+    // ── GroupRemindersByEvent / ReminderSchedule ──────────────────────────
+
+    private static readonly IReadOnlyDictionary<Guid, IReadOnlyList<Reminder>> NoReminders =
+        new Dictionary<Guid, IReadOnlyList<Reminder>>();
+
+    private static Reminder ReminderFor(
+        Guid eventId, int quantity, ReminderOffsetUnit unit) => new()
+    {
+        Id = Guid.NewGuid(),
+        EventId = eventId,
+        OffsetQuantity = quantity,
+        OffsetUnit = unit,
+    };
+
+    [Fact]
+    public void GroupRemindersByEvent_BucketsByEventId()
+    {
+        var eventA = Guid.NewGuid();
+        var eventB = Guid.NewGuid();
+        var grouped = EventProjection.GroupRemindersByEvent(new List<Reminder>
+        {
+            ReminderFor(eventA, 10, ReminderOffsetUnit.Minutes),
+            ReminderFor(eventA, 1, ReminderOffsetUnit.Days),
+            ReminderFor(eventB, 1, ReminderOffsetUnit.Hours),
+        });
+
+        Assert.Equal(2, grouped.Count);
+        Assert.Equal(2, grouped[eventA].Count);
+        Assert.Single(grouped[eventB]);
+    }
+
+    [Fact]
+    public void ReminderSchedule_DerivesFireTime_FromStoredQuantityAndUnit()
+    {
+        var calendarId = NewCalendar().Id;
+        var evt = StandaloneEvent(
+            calendarId, startUtc: Utc(2026, 7, 20, 9, 0), title: "Dentist");
+        var reminders = EventProjection.GroupRemindersByEvent(new List<Reminder>
+        {
+            // "2 weeks before" — stored as (2, Weeks), minutes derived.
+            ReminderFor(evt.Id, 2, ReminderOffsetUnit.Weeks),
+        });
+
+        var result = EventProjection.ReminderSchedule(
+            new[] { evt }, reminders, Utc(2026, 7, 1), Utc(2026, 8, 1));
+
+        var only = Assert.Single(result);
+        Assert.Equal(Utc(2026, 7, 6, 9, 0), only.FireTimeUtc); // 14 days before
+        Assert.Equal(Utc(2026, 7, 20, 9, 0), only.EventStartTimeUtc);
+        Assert.Equal("Dentist", only.Title);
+    }
+
+    [Fact]
+    public void ReminderSchedule_Standalone_KeyedByMasterRef_AndReminderId()
+    {
+        var calendarId = NewCalendar().Id;
+        var evt = StandaloneEvent(calendarId, startUtc: Utc(2026, 7, 20, 9, 0));
+        var reminder = ReminderFor(evt.Id, 10, ReminderOffsetUnit.Minutes);
+        var reminders = EventProjection.GroupRemindersByEvent(
+            new List<Reminder> { reminder });
+
+        var only = Assert.Single(EventProjection.ReminderSchedule(
+            new[] { evt }, reminders, Utc(2026, 7, 1), Utc(2026, 8, 1)));
+
+        var master = Assert.IsType<EventRef.Master>(only.Ref);
+        Assert.Equal(evt.Id, master.Id);
+        Assert.Equal(reminder.Id, only.ReminderId);
+    }
+
+    [Fact]
+    public void ReminderSchedule_EventsWithoutReminders_Skipped()
+    {
+        var calendarId = NewCalendar().Id;
+        var with = StandaloneEvent(
+            calendarId, startUtc: Utc(2026, 7, 10, 9, 0), title: "Has");
+        var without = StandaloneEvent(
+            calendarId, startUtc: Utc(2026, 7, 11, 9, 0), title: "None");
+        var reminders = EventProjection.GroupRemindersByEvent(new List<Reminder>
+        {
+            ReminderFor(with.Id, 10, ReminderOffsetUnit.Minutes),
+        });
+
+        var result = EventProjection.ReminderSchedule(
+            new[] { with, without }, reminders, Utc(2026, 7, 1), Utc(2026, 8, 1));
+
+        Assert.Single(result);
+        Assert.Equal("Has", result[0].Title);
+    }
+
+    [Fact]
+    public void ReminderSchedule_FiltersFireTimesOutsideWindow()
+    {
+        var calendarId = NewCalendar().Id;
+        // Fires Jul 10 08:45 — inside [Jul 1, Jul 31].
+        var inside = StandaloneEvent(
+            calendarId, startUtc: Utc(2026, 7, 10, 9, 0), title: "Inside");
+        // Fires Jun 30 23:50 — before the window opens.
+        var before = StandaloneEvent(
+            calendarId, startUtc: Utc(2026, 7, 1, 0, 0), title: "Before");
+        // Fires Aug 1 08:45 — after the window closes.
+        var after = StandaloneEvent(
+            calendarId, startUtc: Utc(2026, 8, 1, 9, 0), title: "After");
+        var reminders = EventProjection.GroupRemindersByEvent(new List<Reminder>
+        {
+            ReminderFor(inside.Id, 15, ReminderOffsetUnit.Minutes),
+            ReminderFor(before.Id, 10, ReminderOffsetUnit.Minutes),
+            ReminderFor(after.Id, 15, ReminderOffsetUnit.Minutes),
+        });
+
+        var result = EventProjection.ReminderSchedule(
+            new[] { inside, before, after }, reminders,
+            Utc(2026, 7, 1), Utc(2026, 7, 31));
+
+        Assert.Single(result);
+        Assert.Equal("Inside", result[0].Title);
+    }
+
+    [Fact]
+    public void ReminderSchedule_RecurringOccurrences_InheritViaEventIdJoin_NoExpanderInvolvement()
+    {
+        // The inheritance mechanism IS the identity contract: an expanded
+        // occurrence carries its master's Id, so the EventId-keyed lookup
+        // hands every occurrence the master's reminders with no reminder
+        // code in the expander. Each fires relative to its own start.
+        var calendarId = NewCalendar().Id;
+        var master = RecurringMaster(
+            calendarId, rrule: "FREQ=WEEKLY", startUtc: Utc(2026, 7, 6, 9, 0),
+            title: "Standup");
+        var reminder = ReminderFor(master.Id, 30, ReminderOffsetUnit.Minutes);
+        var reminders = EventProjection.GroupRemindersByEvent(
+            new List<Reminder> { reminder });
+
+        var expanded = EventProjection.ExpandRecurrences(
+            new[] { master }, Utc(2026, 7, 6), Utc(2026, 7, 26, 23, 59), NoOverrides);
+        var result = EventProjection.ReminderSchedule(
+            expanded, reminders, Utc(2026, 7, 1), Utc(2026, 8, 1));
+
+        // Jul 6, 13, 20 at 09:00 → reminders at 08:30 each.
+        Assert.Equal(
+            new[] { Utc(2026, 7, 6, 8, 30), Utc(2026, 7, 13, 8, 30), Utc(2026, 7, 20, 8, 30) },
+            result.Select(r => r.FireTimeUtc));
+
+        // Each intent keys to its own occurrence (same series id,
+        // discriminated by anchor) and to the shared reminder's id.
+        Assert.All(result, r =>
+        {
+            var occ = Assert.IsType<EventRef.Occurrence>(r.Ref);
+            Assert.Equal(master.Id, occ.SeriesId);
+            Assert.Equal(reminder.Id, r.ReminderId);
+        });
+        Assert.Equal(
+            new[] { Utc(2026, 7, 6, 9, 0), Utc(2026, 7, 13, 9, 0), Utc(2026, 7, 20, 9, 0) },
+            result.Select(r => ((EventRef.Occurrence)r.Ref).AnchorUtc));
+    }
+
+    [Fact]
+    public void ReminderSchedule_MultipleRemindersPerEvent_EmitDistinctIntents()
+    {
+        // The domain supports N reminders even though the MVP editor shows
+        // one. Two reminders on one event → two intents on the same
+        // occurrence, discriminated by ReminderId.
+        var calendarId = NewCalendar().Id;
+        var evt = StandaloneEvent(
+            calendarId, startUtc: Utc(2026, 7, 20, 9, 0), title: "Flight");
+        var dayBefore = ReminderFor(evt.Id, 1, ReminderOffsetUnit.Days);
+        var tenMinutes = ReminderFor(evt.Id, 10, ReminderOffsetUnit.Minutes);
+        var reminders = EventProjection.GroupRemindersByEvent(
+            new List<Reminder> { dayBefore, tenMinutes });
+
+        var result = EventProjection.ReminderSchedule(
+            new[] { evt }, reminders, Utc(2026, 7, 1), Utc(2026, 8, 1));
+
+        Assert.Equal(2, result.Count);
+        // Ordered by fire time: the day-before intent fires first.
+        Assert.Equal(Utc(2026, 7, 19, 9, 0), result[0].FireTimeUtc);
+        Assert.Equal(dayBefore.Id, result[0].ReminderId);
+        Assert.Equal(Utc(2026, 7, 20, 8, 50), result[1].FireTimeUtc);
+        Assert.Equal(tenMinutes.Id, result[1].ReminderId);
+        // Same occurrence identity on both.
+        Assert.All(result, r => Assert.Equal(
+            evt.Id, Assert.IsType<EventRef.Master>(r.Ref).Id));
+    }
+
+    [Fact]
+    public void ReminderSchedule_OrdersByFireTime_AcrossEvents()
+    {
+        var calendarId = NewCalendar().Id;
+        var later = StandaloneEvent(
+            calendarId, startUtc: Utc(2026, 7, 25, 9, 0), title: "Later");
+        var earlier = StandaloneEvent(
+            calendarId, startUtc: Utc(2026, 7, 5, 9, 0), title: "Earlier");
+        var reminders = EventProjection.GroupRemindersByEvent(new List<Reminder>
+        {
+            ReminderFor(later.Id, 10, ReminderOffsetUnit.Minutes),
+            ReminderFor(earlier.Id, 10, ReminderOffsetUnit.Minutes),
+        });
+
+        var result = EventProjection.ReminderSchedule(
+            new[] { later, earlier }, reminders, Utc(2026, 7, 1), Utc(2026, 8, 1));
+
+        Assert.Equal(new[] { "Earlier", "Later" }, result.Select(r => r.Title));
+    }
 }

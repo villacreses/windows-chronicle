@@ -187,12 +187,12 @@ public sealed class EventRepository
     }
 
     /// <summary>
-    /// Deletes an event and all of its <c>EventOverride</c> rows in a
-    /// single transaction. Override-delete runs first so the FK on
-    /// EventOverrides.SeriesEventId is never violated. Mirrors the
-    /// cascade pattern <see cref="CalendarRepository.DeleteAsync"/> uses
-    /// for Events → Calendars (see DECISIONS.md for why cascade lives in
-    /// the repository, not in a schema ON DELETE CASCADE).
+    /// Deletes an event and all of its dependent rows (<c>EventOverride</c>,
+    /// <c>Reminder</c>) in a single transaction. Dependent deletes run first
+    /// so no FK is ever violated. Mirrors the cascade pattern
+    /// <see cref="CalendarRepository.DeleteAsync"/> uses for Events →
+    /// Calendars (see DECISIONS.md for why cascade lives in the repository,
+    /// not in a schema ON DELETE CASCADE).
     /// </summary>
     public async Task DeleteAsync(Guid id)
     {
@@ -201,6 +201,8 @@ public sealed class EventRepository
         try
         {
             await OverrideRepository.DeleteForSeriesInTransactionAsync(
+                connection, transaction, id);
+            await ReminderRepository.DeleteForEventInTransactionAsync(
                 connection, transaction, id);
 
             using (var deleteEvent = connection.CreateCommand())
