@@ -20,7 +20,7 @@ model.**
 | 1 | `Reminder` child entity + `Reminders` table + repository + `EventProjection.ReminderSchedule` + `ReminderOccurrence` | **landed** |
 | 2 | "Remind me" picker in `EventEditPopover` (one reminder, master path) | **landed** |
 | 3 | `IReminderScheduler` seam + toast adapter + reconciler wired to launch/CRUD | **landed** |
-| 4 | Custom `Main` single-instancing + classic toast activation → deep-link | planned |
+| 4 | Custom `Main` single-instancing + classic toast activation → deep-link | **landed** |
 | 5 | Cross-doc updates (DECISIONS / DATA_MODEL / AGENT_ONBOARDING) | planned |
 
 Anything marked *planned* is designed here but not yet in the code.
@@ -353,7 +353,7 @@ natural feed into it — the seam already routes failures to a single place
 where such a surface could observe them, rather than hiding them in the
 adapter.
 
-## Activation [planned, unit 4]
+## Activation
 
 Validated by the spike: a clicked scheduled toast activates through the
 **classic** path — `AppInstance.GetCurrent().GetActivatedEventArgs()`
@@ -361,15 +361,42 @@ returns `ExtendedActivationKind.ToastNotification` with the launch argument
 intact. `AppNotificationManager.NotificationInvoked` is not involved, and no
 manifest COM-activator declaration is required for a packaged app.
 
-- **Payload.** The launch arguments encode `EventRef` + `ReminderId`;
-  activation decodes them. The short OS tag is never used for
-  reconstruction.
-- **Deep-link.** Decode `EventRef`, navigate to the event's day, open it.
-- **Single-instancing (keeper).** A clicked toast must *focus the existing
-  window*, not spawn a second one. Requires `AppInstance` redirection in a
-  **custom `Main`** (`DISABLE_XAML_GENERATED_MAIN`), *before*
-  `Application.Start`. Doing the redirect in `OnLaunched` deadlocks the XAML
-  STA thread and crashes with a `COMException` (learned during the spike).
+**Activation is translation, not logic.** Its sole job is to turn an OS
+activation into the *existing* Chronicle navigation model. It knows nothing
+of scheduling, reminders, or recurrence expansion. The flow is deliberately
+small:
+
+```
+Toast activation
+   → decode ReminderActivationPayload  (EventRef + ReminderId)
+   → resolve the event's day           (occurrence anchor, or a loaded master's start)
+   → focus the existing instance / launch
+   → navigate (SelectDate + Day view)
+   → open the event                     (found by identity in the loaded projection)
+```
+
+- **Payload.** The launch arguments encode `EventRef` + `ReminderId` (via
+  `ReminderActivationPayload`); activation decodes them. The short OS tag is
+  never used for reconstruction. A malformed argument decodes to null and
+  activation degrades to "just focus the window."
+- **No recurrence in activation.** The target event is found by matching the
+  decoded `EventRef` against the projection the normal load pipeline already
+  expanded for that day (occurrence: `Id` + `SeriesAnchorUtc`; master:
+  `Id`, no anchor). Activation never expands anything itself. Best-effort: if
+  the event was deleted since the toast was scheduled, the user lands on the
+  day with nothing to open.
+- **Single-instancing (keeper).** A clicked toast focuses the existing window
+  rather than spawning a second one. `AppInstance` redirection lives in a
+  **custom `Main`** (`Program.cs`, with the `DISABLE_XAML_GENERATED_MAIN`
+  define replacing the generated entry point), *before* `Application.Start` —
+  the primary instance registers a key and routes redirected activations into
+  `App.OnRedirectedActivation`; a secondary instance redirects and exits.
+  Doing the redirect in `OnLaunched` deadlocks the XAML STA thread with a
+  `COMException` (learned during the spike), which is why it must be in Main.
+- **Two entry points, one handler.** A cold toast-launch is handled in
+  `App.OnLaunched` (via `GetActivatedEventArgs`); a warm toast-click (app
+  already open) arrives through the primary instance's `Activated` event and
+  `App.OnRedirectedActivation`. Both funnel into one `HandleActivation`.
 
 ## Spike findings (empirical record)
 

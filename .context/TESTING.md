@@ -14,6 +14,12 @@ cross, the invariants it pins, and the rule for which layer a change belongs
 to. A change that contradicts an invariant here is either testing the wrong
 thing or has surfaced real contract drift worth raising before it lands.
 
+Behaviors that genuinely cannot be automated — OS integration points like
+toast delivery/activation and single-instance launch — live in
+`testing/MANUAL_VERIFICATION.md`, a terse registry of what a human must still
+verify and why. That registry is deliberately narrow; anything automatable
+belongs in this suite instead.
+
 ## Assembly Shape
 
 The domain is a separate assembly, and the test project references it
