@@ -19,7 +19,7 @@ model.**
 |------|-------|--------|
 | 1 | `Reminder` child entity + `Reminders` table + repository + `EventProjection.ReminderSchedule` + `ReminderOccurrence` | **landed** |
 | 2 | "Remind me" picker in `EventEditPopover` (one reminder, master path) | **landed** |
-| 3 | `IReminderScheduler` seam + toast adapter + reconciler wired to launch/CRUD | planned |
+| 3 | `IReminderScheduler` seam + toast adapter + reconciler wired to launch/CRUD | **landed** |
 | 4 | Custom `Main` single-instancing + classic toast activation → deep-link | planned |
 | 5 | Cross-doc updates (DECISIONS / DATA_MODEL / AGENT_ONBOARDING) | planned |
 
@@ -264,7 +264,7 @@ grow into an "Add reminder" collection UI — repeated `(quantity, unit)` rows
 read/seed of the reminder set changes. Nobody should read the dropdown as
 evidence that Chronicle events carry at most one reminder.
 
-## Reconciliation contract [planned, unit 3]
+## Reconciliation contract
 
 The OS schedule is a **disposable cache** of the `ReminderOccurrence`
 projection, never a second source of truth. Reconciliation converges the OS
@@ -288,6 +288,13 @@ schedule toward the projection's current output.
 - **Toast identity = (occurrence anchor, ReminderId).** The short OS
   tag/group is only for group-clear; the full identity (`EventRef` +
   `ReminderId`) travels in the launch arguments.
+- **Bounded schedule (policy).** The scheduler reconciles the desired set
+  *subject to an implementation-defined maximum*, to avoid exhausting the
+  platform's scheduled-toast limit. When the desired set exceeds that
+  maximum, the **earliest-firing** reminders are preferred. This is part of
+  the seam's contract, not an implementation accident — the current value is
+  1000 (well under the ~4096 platform ceiling), tunable without changing the
+  contract. The horizon keeps realistic datasets far below it.
 - **Reconcile triggers:** app launch, resume, event/calendar CRUD (which
   includes reminder edits — the editor mutates reminders then requests a
   reconcile). **Not** calendar-visibility toggles — visibility is ephemeral
@@ -299,6 +306,52 @@ schedule toward the projection's current output.
 Recurring mutations converge for free: changing a rule or start time
 changes the walk anchors, hence the `EventRef` keys, so old intents leave
 the desired set and new ones enter it.
+
+### As implemented (unit 3)
+
+- **Two layers, two single-responsibilities.** `MainWindow.ReconcileRemindersAsync`
+  is the single *compute* site — it runs its own load over the horizon
+  (`GetInRangeAsync` → `ExpandRecurrences` → `GroupRemindersByEvent` →
+  `ReminderSchedule`) and hands the `ReminderOccurrence[]` to the scheduler.
+  `ScheduledToastReminderScheduler.ReconcileAsync` is the single *OS-mutate*
+  site — clear the group, add the desired set. The scheduler receives a fully
+  projected list and knows nothing of events, recurrence, or repositories.
+- **Own horizon load, not `_eventsByDate`.** Reminders need ~60 days ahead
+  (`ReminderHorizon`), not the active view's month, so the reconciler is an
+  independent projection consumer with its own range — structurally the same
+  as Search. The event query is padded (`ReminderHorizonPad`, 31 days) past
+  the horizon so an event starting just beyond it, whose reminder fires
+  inside it, is still expanded.
+- **The reconciler is one consumer of a generic chokepoint.**
+  `AfterDataMutationAsync` is a semantically generic "persisted calendar data
+  changed" lifecycle event (invalidate + refresh); `ReconcileRemindersAsync`
+  is one downstream consumer hung off it, after the view refresh. The
+  chokepoint is deliberately *not* "the place reminders happen" — future
+  consumers (provider-sync bookkeeping, search indexing) would attach to the
+  same event. Launch reconciles because startup funnels through the same
+  chokepoint via `ReloadCalendarsAndRefreshAsync`.
+- **Bounded schedule.** `ScheduledToastReminderScheduler` realizes the
+  contract's bound with a max of 1000 (see the reconciliation contract's
+  "bounded schedule" clause).
+
+### Failure and observability contract
+
+A reminder-scheduling failure must **never** abort the mutation that
+triggered it. The seam surfaces failures to the reconcile orchestration
+(the adapter does not swallow them internally); `ReconcileRemindersAsync`
+catches and logs, and the app stays fully usable. The guarantee to the user:
+
+> The application remains usable regardless of scheduling failures. A failed
+> reconcile leaves the previous OS schedule in place (or partially updated);
+> the **next** reconcile — the next launch, resume, or reminder-affecting
+> mutation — recomputes the full desired set and repairs it. Failures are at
+> minimum visible in the debug log.
+
+This is deliberately the *floor*, not the ceiling. If Chronicle ever grows a
+diagnostics or sync-status surface, reminder-scheduling failures are a
+natural feed into it — the seam already routes failures to a single place
+where such a surface could observe them, rather than hiding them in the
+adapter.
 
 ## Activation [planned, unit 4]
 
@@ -402,15 +455,28 @@ before the model shipped**, for three reasons:
 referenced externally, loaded as a side collection. This keeps "first-class
 domain concept" from sprawling into an independent service layer.
 
-## Assembly boundary
+## Assembly boundary and the platform principle
 
-Pure parts live in `Chronicle.Core` and are unit-tested: the `Reminder`
-entity + `Validate`, the schema, the `ReminderRepository` (bulk load by
-event, cascade helpers), and `EventProjection.ReminderSchedule` producing
-`ReminderOccurrence`. The Windows-specific pieces — the
-`ScheduledToastNotification` adapter, the reconciler, activation handling —
-live in `src/Chronicle` (the app) behind a thin `IReminderScheduler` seam
-(`Reconcile(IReadOnlyList<ReminderOccurrence>)`). `Windows.UI.Notifications`
-stays out of `Chronicle.Core`, exactly as the `ApplicationData` path
-resolution does. The notification-API choice is isolated to one swappable
-adapter class.
+The goal is **not to hide Windows APIs**. Chronicle is a native Windows
+application and uses Windows APIs freely wherever they naturally fit. The
+principle that governs where they go is about *responsibility*, not
+avoidance:
+
+- Windows APIs are used freely where they belong.
+- Each subsystem owns the platform APIs associated with its responsibility.
+- Platform concerns don't reshape the domain model or bleed across subsystem
+  boundaries.
+
+Applied here: pure parts live in `Chronicle.Core` and are unit-tested — the
+`Reminder` entity + `Validate`, the schema, the `ReminderRepository` (bulk
+load by event, cascade helpers), `EventProjection.ReminderSchedule` producing
+`ReminderOccurrence`, and the `ReminderActivationPayload` codec (pure identity
+serialization, shared by the scheduler and activation). These carry no
+notification concepts. The notification subsystem's platform APIs
+(`Windows.UI.Notifications`) live in `src/Chronicle` in exactly one place —
+`ScheduledToastReminderScheduler`, behind the `IReminderScheduler` seam. That
+`ScheduledToastReminderScheduler` depends directly on `Windows.UI.Notifications`
+is correct: that is where the dependency belongs. What the boundary prevents
+is the reverse — toast concepts leaking back into `Reminder` /
+`ReminderOccurrence`, or unrelated code manipulating scheduled toasts. The
+seam is a responsibility boundary, not a Windows firewall.

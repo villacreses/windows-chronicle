@@ -2,6 +2,7 @@ using Chronicle.Data.Repositories;
 using Chronicle.Helpers;
 using Chronicle.Models;
 using Chronicle.Models.Recurrence;
+using Chronicle.Notifications;
 using Chronicle.Projection;
 using Chronicle.Views.Dialogs;
 using Chronicle.Views.Popovers;
@@ -27,6 +28,13 @@ namespace Chronicle
         private readonly CalendarRepository _calendarRepository = new();
         private readonly OverrideRepository _overrideRepository = new();
         private readonly ReminderRepository _reminderRepository = new();
+
+        // The sole owner of the OS scheduled-toast cache. Behind the seam so
+        // the notification subsystem owns its platform APIs in one place —
+        // not to hide Windows, but so toast concepts never leak back into the
+        // reminder model and no other code mutates scheduled toasts.
+        private readonly IReminderScheduler _reminderScheduler =
+            new ScheduledToastReminderScheduler();
 
         private readonly SidebarRenderer _sidebarRenderer;
         private readonly CalendarGridRenderer _calendarGridRenderer;
@@ -1026,6 +1034,89 @@ namespace Chronicle
         {
             InvalidateLoadedEvents();
             await RefreshActiveViewAsync();
+
+            // Reminder scheduling is ONE downstream consumer of this generic
+            // lifecycle event — not the reason the chokepoint exists. Run it
+            // after the view refresh so a slow or failing schedule never
+            // delays the visible update. Other future consumers (provider-sync
+            // bookkeeping, search indexing) would hang off the same event.
+            await ReconcileRemindersAsync();
+        }
+
+        // ── Reminder schedule reconciliation ──────────────────────────────────
+
+        // Horizon policy (NOTIFICATIONS.md): schedule reminders whose fire time
+        // falls within this window from now. A tunable policy, not an invariant.
+        private static readonly TimeSpan ReminderHorizon = TimeSpan.FromDays(60);
+
+        // Expansion pad: an event can start past the horizon yet have a reminder
+        // firing inside it (a large lead). Expand comfortably beyond the
+        // editor's largest preset (2 weeks) so no in-window reminder is missed.
+        private static readonly TimeSpan ReminderHorizonPad = TimeSpan.FromDays(31);
+
+        /// <summary>
+        /// Recomputes the desired reminder schedule from persisted state and
+        /// hands it to the scheduler, which reconciles the OS toast cache to
+        /// match. This is the single place the reminder projection is computed
+        /// and handed to the notification boundary; the scheduler is the single
+        /// place the OS cache is mutated.
+        ///
+        /// Runs its own load over the HORIZON range — independent of the active
+        /// view's loaded range, since reminders need ~60 days ahead, not the
+        /// current month. Reuses the same projection pipeline as the views and
+        /// search (<see cref="EventRepository.GetInRangeAsync"/> →
+        /// <see cref="EventProjection.ExpandRecurrences"/> →
+        /// <see cref="EventProjection.ReminderSchedule"/>); it duplicates no
+        /// projection logic.
+        ///
+        /// Failure contract (NOTIFICATIONS.md): a scheduling failure must never
+        /// abort the mutation that triggered it. Failures are caught and logged;
+        /// the app stays usable and the next reconcile repairs the schedule. If
+        /// Chronicle grows a diagnostics/sync-status surface, reminder failures
+        /// would feed into it here.
+        /// </summary>
+        private async Task ReconcileRemindersAsync()
+        {
+            try
+            {
+                var nowUtc = DateTime.UtcNow;
+                var windowStartUtc = nowUtc;
+                var windowEndUtc = nowUtc + ReminderHorizon;
+                var expandEndUtc = windowEndUtc + ReminderHorizonPad;
+
+                // Own load over the horizon (not _eventsByDate — that is the
+                // active view's range).
+                var rows = await _eventRepository.GetInRangeAsync(
+                    windowStartUtc, expandEndUtc);
+
+                var recurringMasterIds = rows
+                    .Where(e => e.RecurrenceRule is not null)
+                    .Select(e => e.Id)
+                    .ToList();
+                var overrides = recurringMasterIds.Count == 0
+                    ? new List<EventOverride>()
+                    : await _overrideRepository.GetForSeriesAsync(recurringMasterIds);
+                var overridesBySeries = EventProjection.GroupOverridesBySeries(overrides);
+
+                var expanded = EventProjection.ExpandRecurrences(
+                    rows, windowStartUtc, expandEndUtc, overridesBySeries);
+
+                var eventIds = expanded.Select(e => e.Id).Distinct().ToList();
+                var reminders = await _reminderRepository.GetForEventsAsync(eventIds);
+                var remindersByEvent = EventProjection.GroupRemindersByEvent(reminders);
+
+                var schedule = EventProjection.ReminderSchedule(
+                    expanded, remindersByEvent, windowStartUtc, windowEndUtc);
+
+                await _reminderScheduler.ReconcileAsync(schedule);
+            }
+            catch (Exception ex)
+            {
+                // Non-fatal: reminders may be stale until the next reconcile.
+                System.Diagnostics.Debug.WriteLine(
+                    "Reminder reconcile failed (reminders may be out of sync "
+                    + $"until the next reconcile): {ex.Message}\n{ex.StackTrace}");
+            }
         }
 
         // ── Search ────────────────────────────────────────────────────────────
