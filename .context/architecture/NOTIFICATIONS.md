@@ -10,20 +10,26 @@ it.
 ## Implementation status
 
 Local Baseline Phase C, on branch `feat/local-notifications`. Built in
-units; this doc tracks which have landed. **The domain model was corrected
-from a scalar column to a child entity before implementation proceeded
-(see "Design history" below); the branch is being rebuilt on the entity
-model.**
+units; this doc tracks which have landed. (The domain model was corrected
+from a scalar column to a child entity before implementation proceeded —
+see "Design history" below; the branch was rebuilt on the entity model.)
 
 | Unit | Scope | Status |
 |------|-------|--------|
 | 1 | `Reminder` child entity + `Reminders` table + repository + `EventProjection.ReminderSchedule` + `ReminderOccurrence` | **landed** |
 | 2 | "Remind me" picker in `EventEditPopover` (one reminder, master path) | **landed** |
-| 3 | `IReminderScheduler` seam + toast adapter + reconciler wired to launch/CRUD | **landed** |
-| 4 | Custom `Main` single-instancing + classic toast activation → deep-link | **landed** |
-| 5 | Cross-doc updates (DECISIONS / DATA_MODEL / AGENT_ONBOARDING) | planned |
+| 3 | `IReminderScheduler` seam + toast adapter + reconciler wired to launch/CRUD | **landed** — pending live verification |
+| 4 | Custom `Main` single-instancing + classic toast activation → deep-link | **landed** — pending live verification |
+| 5 | Cross-doc updates (DECISIONS / DATA_MODEL / AGENT_ONBOARDING) | planned (AGENT_ONBOARDING done) |
 
 Anything marked *planned* is designed here but not yet in the code.
+
+**Pending live verification:** units 3–4 are code-complete and build clean,
+but the packaged toast/activation behavior has not yet been verified against
+the real OS. Before any further work, run
+`.context/testing/MANUAL_VERIFICATION.md` MV-003 first (custom `Main` /
+single-instance — launch-critical), then MV-001/002 (cold/warm activation
+deep-link) and MV-004 (delivery). Iterate on any failures before unit 5.
 
 ## Architectural model
 

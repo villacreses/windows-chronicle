@@ -37,6 +37,16 @@ anything is built on top of it.
   helpers out of `MainWindow` / `TimelineRenderHelper` / `EventEditPopover`
   into `Chronicle.Core`. Plus a coverage-gap pass and an event-pipeline
   integration test. All Layer 5 targets are now covered.
+- Local Baseline Phase A — all-day polish + notes/description field
+  (editor toggle + Notes box, occurrence-override support, selected-day
+  description peek; all-day constrained to single-day, see BACKLOG.md).
+  Merged via PR #16.
+- Local Baseline Phase B — Search (`SearchCandidatesAsync` LIKE +
+  override union → `EventProjection.SearchOccurrences`; header
+  AutoSuggestBox + results flyout; PR #15), Agenda view (today → end of
+  next month, anchored not paged; PR #17), Year view (4×3 density-tinted
+  mini-months, tap-to-drill; PR #17). All reuse the `EventProjection`
+  pipeline; suite grew to ~214.
 
 ### UI CONSTRAINT (TEMPORARY)
 
@@ -69,63 +79,59 @@ calendar to do — not a nice-to-have.
 6. **Notifications / reminders** — scheduled, reliable,
    persistence-aware.
 
-### Recommended sequencing
+### Status (2026-07-14)
 
-Three phases, ordered foundation-first and trust-last:
+**Phases A and B are shipped** (merged to main via PRs #15, #16, #17 —
+see Completed above). Their open questions were settled as follows:
+search is SQLite `LIKE` over Title/Description with an in-SQL
+`EventOverrides` union (FTS5 deliberately rejected — rationale and
+revisit triggers in BACKLOG.md "Search backend upgrade"); Agenda is
+anchored today→end-of-next-month with Prev/Next disabled; Year is a
+4×3 density-tinted grid with tap-to-drill.
 
-**Phase A — Event content completeness:**
+**Phase C (Notifications) is IN PROGRESS on `feat/local-notifications`.**
+`architecture/NOTIFICATIONS.md` is the living design record — model,
+OS-scheduling rationale, activation-spike findings, reconciliation
+contract, per-unit status table. Read it first. The design in one
+line: `Reminder` is a child entity of the Event aggregate (stored as
+the user expressed it, `(OffsetQuantity, OffsetUnit)`), projected by
+`EventProjection.ReminderSchedule` into `ReminderOccurrence[]`, which
+the sole-owner `ScheduledToastReminderScheduler` reconciles
+(clear-and-rebuild) into OS scheduled toasts that fire even when
+Chronicle is closed.
 
-- All-day event polish
-- Notes / description field
+Landed on the branch (units 0–4 + registry, suite at 250):
 
-Both touch the editor form, the popover, and the renderers; doing
-them together means one editor revision, not two. Data-model support
-likely already exists (Events table carries `IsAllDay` and
-`Description`); the question per item is how much UI / rendering work
-remains. Phase A begins with an audit of the current state.
+- `4b8aff4` NOTIFICATIONS.md design record (doc-first)
+- `4edb18e` Reminder child entity + schedule projection (unit 1)
+- `38a1dd8` reminder picker in event editor (unit 2)
+- `072370c` single post-mutation chokepoint refactor
+- `ec84d8e` reminder scheduler + reconciliation (unit 3)
+- `d419770` toast activation deep-link + single-instancing (unit 4)
+- `26129a1` manual verification registry (`testing/MANUAL_VERIFICATION.md`)
 
-**Phase B — Discovery:**
+**Immediate next steps, in order:**
 
-- Search (data layer + UI surface)
-- Agenda view (new renderer, reuses event pipeline)
-- Year view (new renderer)
+1. **Live verification (NOT yet done).** Units 3–4 are code-complete
+   but the packaged toast/activation behavior is unverified. Run
+   `testing/MANUAL_VERIFICATION.md` MV-003 first (custom `Main` /
+   single-instance — launch-critical), then MV-001/002 (cold/warm
+   deep-link) and MV-004 (delivery). Iterate on failures before
+   anything else.
+2. **Unit 5 — cross-doc updates.** DECISIONS.md entry for the
+   Phase C rationale forks (OS-scheduled over app-scheduled; entity
+   over scalar — NOTIFICATIONS.md "Design history" has the content);
+   DATA_MODEL.md core-tables list gains `Reminders`.
+   AGENT_ONBOARDING.md is already done.
+3. **PR to main.** NOTE: `origin/feat/local-notifications` still
+   points at the abandoned scalar-model commit `6d5d9a5` — push with
+   `--force-with-lease`. The scalar work is preserved on local branch
+   `backup/reminders-scalar-model`.
 
-Search first — most user-visible value, and its storage / index
-decisions inform the agenda and year queries. Both new views reuse
-`_eventsByDate` and `DateHelpers`; per "View Switching Does Not
-Query" they should issue zero SQLite queries when the loaded range
-hasn't changed.
-
-**Phase C — Reliability:**
-
-- Notifications / reminders
-
-Notifications go last. The subsystem is the largest single piece —
-Windows toast scheduling, reminder persistence, snooze / dismiss
-state, a new schema, and a NOTIFICATIONS.md doc that will be created
-when this phase begins. An unreliable reminder erodes trust more
-than a missing one; shipping reminders on top of a polished calendar
-means fewer moving parts to debug if a reminder misfires. The Idle
-Cost Budget forbids polling, so registration with the platform's
-notification scheduler is the only acceptable shape — not an in-app
-timer.
-
-### Open questions to settle as each phase begins
-
-- **Phase A** — audit the current all-day path: does the model carry
-  `IsAllDay`? Does the editor expose the toggle? Where do renderers
-  surface it (month chip variant, week all-day band, day all-day
-  band)? Notes similarly: schema column likely exists; is the gap
-  UI-only?
-- **Phase B** — search storage and query shape (SQLite `LIKE` vs FTS5;
-  bulk-write rules apply if FTS5 needs a rebuild). Agenda view's range
-  (next-N-events vs next-N-days). Year view interaction model
-  (tap-to-drill semantics; how event density gets rendered).
-- **Phase C** — Windows toast scheduling (registered with the system,
-  not in-app polling). Reminder persistence (column on `Events` vs
-  separate table — interacts with `EventOverride` for per-occurrence
-  reminder edits). Snooze / dismiss state and how it survives app
-  restarts.
+Deferred beyond this branch (recorded in NOTIFICATIONS.md): Stage 2
+snooze/dismiss (`ReminderState` keyed on `(EventRef.Occurrence,
+ReminderId)`), multi-reminder editor UI, per-occurrence reminder
+overrides, default-reminder setting.
 
 ## Recently Completed: Recurrence Phase 2B
 
@@ -303,9 +309,10 @@ Before Google integration begins:
 - Day view ✓
 - Calendar management ✓
 - Recurrence (Phase 1 + 2A + 2B) ✓
-- All-day event polish (Phase A)
-- Notes / description field (Phase A)
-- Search (Phase B)
-- Agenda view (Phase B)
-- Year view (Phase B)
-- Notifications / reminders (Phase C)
+- All-day event polish (Phase A) ✓
+- Notes / description field (Phase A) ✓
+- Search (Phase B) ✓
+- Agenda view (Phase B) ✓
+- Year view (Phase B) ✓
+- Notifications / reminders (Phase C) — in progress on
+  `feat/local-notifications`; see "Status" above
