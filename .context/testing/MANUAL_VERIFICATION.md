@@ -26,6 +26,16 @@ This is **not** a general QA checklist. Anything that *can* be unit- or
 integration-tested belongs in `Chronicle.Tests`, not here. Keep each entry
 terse; if an entry can later be automated, delete it and write the test.
 
+## Optional: History
+
+An entry may carry a **History:** list — dated one-liners for the times it
+caught a real defect or platform quirk. Most entries won't have one, and a
+passing run is never logged; the point is the opposite. A manual check earns
+its place only by surfacing something the code alone couldn't reveal, so a
+non-empty history is the signal to a future contributor that this test is
+load-bearing, not ceremony — and a hint at the class of bug it guards. Keep
+each line to a date and the finding; name the fix's home doc if it has one.
+
 Related: `.context/TESTING.md` (the automated test architecture) and
 `architecture/NOTIFICATIONS.md` (the reminder subsystem these entries cover).
 
@@ -60,6 +70,16 @@ cross-process handshake the suite can't drive.
 
 **Expected:** The **existing** window focuses (no second window opens),
 navigates to the event's day, and opens the event.
+
+**History:**
+- 2026-07: Revealed cross-thread COM access on the redirected warm path —
+  reading the WinRT activation `.Data` after marshaling it to the UI thread
+  threw `COMException` (RPC_E_WRONG_THREAD). Fix: decode the argument on the
+  activation's own thread. See NOTIFICATIONS.md "Activation."
+- 2026-07: Revealed the window not raising to the foreground — the primary
+  instance holds no foreground rights, so `AppWindow.Show()`/`Activate()`
+  weren't enough. Fix: Win32 `SetForegroundWindow` (+ restore if minimized).
+  See NOTIFICATIONS.md "Activation."
 
 ---
 

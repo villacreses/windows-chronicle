@@ -112,12 +112,12 @@ Landed on the branch (units 0–4 + registry, suite at 250):
 
 **Immediate next steps, in order:**
 
-1. **Live verification (NOT yet done).** Units 3–4 are code-complete
-   but the packaged toast/activation behavior is unverified. Run
-   `testing/MANUAL_VERIFICATION.md` MV-003 first (custom `Main` /
-   single-instance — launch-critical), then MV-001/002 (cold/warm
-   deep-link) and MV-004 (delivery). Iterate on failures before
-   anything else.
+1. **Live verification (DONE).** All of `testing/MANUAL_VERIFICATION.md`
+   passes: MV-001/002 (cold/warm deep-link), MV-003 (single-instance),
+   MV-004 (delivery). The warm path needed two OS-only fixes — decode
+   the activation argument off the UI thread (cross-thread COM), and an
+   explicit `SetForegroundWindow` to raise the window — both in
+   `App.xaml.cs` and recorded in NOTIFICATIONS.md "Activation."
 2. **Unit 5 — cross-doc updates.** DECISIONS.md entry for the
    Phase C rationale forks (OS-scheduled over app-scheduled; entity
    over scalar — NOTIFICATIONS.md "Design history" has the content);

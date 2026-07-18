@@ -18,18 +18,19 @@ see "Design history" below; the branch was rebuilt on the entity model.)
 |------|-------|--------|
 | 1 | `Reminder` child entity + `Reminders` table + repository + `EventProjection.ReminderSchedule` + `ReminderOccurrence` | **landed** |
 | 2 | "Remind me" picker in `EventEditPopover` (one reminder, master path) | **landed** |
-| 3 | `IReminderScheduler` seam + toast adapter + reconciler wired to launch/CRUD | **landed** — pending live verification |
-| 4 | Custom `Main` single-instancing + classic toast activation → deep-link | **landed** — pending live verification |
+| 3 | `IReminderScheduler` seam + toast adapter + reconciler wired to launch/CRUD | **landed** — verified live (MV-004 delivery passes) |
+| 4 | Custom `Main` single-instancing + classic toast activation → deep-link | **landed** — verified live (MV-001/002/003 pass; two warm-path fixes, see Activation) |
 | 5 | Cross-doc updates (DECISIONS / DATA_MODEL / AGENT_ONBOARDING) | planned (AGENT_ONBOARDING done) |
 
 Anything marked *planned* is designed here but not yet in the code.
 
-**Pending live verification:** units 3–4 are code-complete and build clean,
-but the packaged toast/activation behavior has not yet been verified against
-the real OS. Before any further work, run
-`.context/testing/MANUAL_VERIFICATION.md` MV-003 first (custom `Main` /
-single-instance — launch-critical), then MV-001/002 (cold/warm activation
-deep-link) and MV-004 (delivery). Iterate on any failures before unit 5.
+**Live verification complete.** All of `.context/testing/MANUAL_VERIFICATION.md`
+passes: MV-001 (cold deep-link), MV-002 (warm deep-link), MV-003 (non-toast
+single-instance relaunch), MV-004 (OS delivery). The warm path needed two
+fixes surfaced only against the real OS: decoding the launch argument on the
+activation's own thread, and an explicit `SetForegroundWindow` to raise the
+window (both recorded under *Activation*). Remaining before merge: unit 5
+(DECISIONS / DATA_MODEL).
 
 ## Architectural model
 
@@ -403,6 +404,29 @@ Toast activation
   `App.OnLaunched` (via `GetActivatedEventArgs`); a warm toast-click (app
   already open) arrives through the primary instance's `Activated` event and
   `App.OnRedirectedActivation`. Both funnel into one `HandleActivation`.
+- **Decode the argument on the activation's own thread, not across the
+  marshal.** The primary instance's `Activated` event fires on a **background
+  thread**. The raw `AppActivationArguments` (and its `.Data`
+  `ToastNotificationActivatedEventArgs`) is a WinRT object with apartment
+  affinity: marshaling it to the UI thread via `DispatcherQueue.TryEnqueue`
+  and *then* reading `.Data` throws `COMException` (RPC_E_WRONG_THREAD,
+  0x8001010E). So `OnRedirectedActivation` pulls the plain launch-argument
+  string out on the background thread (`ExtractToastArgument`) and marshals
+  only that `string?`; `HandleActivation` takes the string, never the WinRT
+  args. The cold path (`OnLaunched`) extracts on the UI thread, where
+  `GetActivatedEventArgs()` was already valid. (Found live at MV-002; the cold
+  path MV-001 never hit it because both ends were the UI thread.)
+- **Focus needs `SetForegroundWindow`, not just `Activate()`.** The warm path
+  runs on the *primary* instance, which does not hold foreground rights, so a
+  background-owned window will not raise from `AppWindow.Show()` /
+  `Window.Activate()` alone — Windows blocks that. `FocusWindow` restores the
+  window if minimized (`IsIconic` → `ShowWindow(SW_RESTORE)`) and calls the
+  Win32 `SetForegroundWindow` before `Activate()`. Classic `[DllImport]` on
+  `user32` (not `[LibraryImport]`, whose generated `bool` marshalling would
+  force `AllowUnsafeBlocks` across the whole app project for three trivial
+  calls; the app project isn't AOT-marked). The toast-redirect path carries
+  enough foreground rights for a plain `SetForegroundWindow` to take; the
+  `AttachThreadInput` bypass was not needed. (Found live at MV-002.)
 
 ## Spike findings (empirical record)
 
