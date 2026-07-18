@@ -64,15 +64,20 @@ The design draws inspiration from Samsung Calendar and Apple Calendar while rema
 - Create events
 - Edit events
 - Delete events
-- All-day events (polish pending — see Roadmap)
+- All-day events
+- Notes / description field
+- Reminders (OS-scheduled toast notifications that fire even when Chronicle is closed)
 - Multi-calendar support
 - Recurring events (RRULE storage, EXDATE skips, per-occurrence overrides, wall-clock anchoring)
+- Search (title and description, including recurring occurrences)
 
 ### Views
 
 - Month View
 - Week View
 - Day View
+- Agenda View
+- Year View
 - Mini-month navigator
 - Selected-day details panel
 
@@ -84,20 +89,18 @@ The design draws inspiration from Samsung Calendar and Apple Calendar while rema
 
 ## Roadmap
 
-### In Progress: Local Baseline
+### Completed: Local Baseline
 
-Six features that finish the local experience before provider integration begins:
+Six features that finish the local experience, all shipped:
 
 - All-day event polish
 - Notes / description field
 - Search
 - Agenda view
 - Year view
-- Reminders
+- Reminders (OS-scheduled toast notifications)
 
-### Planned Integrations
-
-Once the Local Baseline ships:
+### In Progress: Provider Integrations
 
 - Google Calendar
 - Outlook Calendar
@@ -160,4 +163,4 @@ Provide a modern, native calendar experience for Windows.
 
 Active development.
 
-Current focus: completing the Local Baseline (all-day polish, notes, search, agenda view, year view, reminders) before beginning provider integrations.
+The Local Baseline is complete (all-day polish, notes, search, agenda view, year view, reminders). Current focus: provider integrations, starting with Google Calendar.

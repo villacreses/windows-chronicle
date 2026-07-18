@@ -196,7 +196,7 @@ windowStartUtc, windowEndUtc)` computes that product within a UTC window.
 For each occurrence, for each of its reminders, it derives
 `FireTimeUtc = StartTimeUtc − reminder offset`, keeps those in
 `[windowStart, windowEnd]`, and emits them ordered by fire time (then
-title). Pure — no DB, no platform calls.
+title, then reminder id). Pure — no DB, no platform calls.
 
 ```
 ReminderOccurrence { EventRef Ref; Guid ReminderId; DateTime FireTimeUtc;
@@ -215,10 +215,15 @@ ReminderOccurrence { EventRef Ref; Guid ReminderId; DateTime FireTimeUtc;
 `remindersByEventId` dictionary, mirroring `GroupOverridesBySeries`.
 
 **Horizon and padding.** The reconciler expands events over a range padded
-past `windowEndUtc` by the largest reminder offset in use, so an event that
-starts just after the window but whose reminder fires inside it is not
-missed. The horizon is a tunable **policy** (default ~60 days), not an
-architectural invariant.
+past `windowEndUtc` by a **fixed pad** (`ReminderHorizonPad`, 31 days), so
+an event that starts just after the window but whose reminder fires inside
+it is not missed. The fixed pad covers every offset the editor can produce
+(largest preset: 2 weeks) but is **not** derived from the largest offset in
+the data — a reminder whose offset exceeds the pad, on an event starting
+beyond `horizon + pad`, would be silently missed. Unreachable through the
+editor today; becomes reachable the moment another writer (provider sync,
+import) can persist larger offsets. The horizon is a tunable **policy**
+(default ~60 days), not an architectural invariant.
 
 ## Reminder identity across saves
 
@@ -295,12 +300,15 @@ schedule toward the projection's current output.
   the seam's contract, not an implementation accident — the current value is
   1000 (well under the ~4096 platform ceiling), tunable without changing the
   contract. The horizon keeps realistic datasets far below it.
-- **Reconcile triggers:** app launch, resume, event/calendar CRUD (which
+- **Reconcile triggers:** app launch and event/calendar CRUD (which
   includes reminder edits — the editor mutates reminders then requests a
   reconcile). **Not** calendar-visibility toggles — visibility is ephemeral
-  view state; a reminder on a hidden calendar still fires.
+  view state; a reminder on a hidden calendar still fires. There is **no
+  time-based or resume trigger**: a session left open without data
+  mutations does not re-reconcile (see "Horizon policy" below for the
+  consequence).
 - **Partial-failure repair.** If a reconcile is interrupted mid-rebuild, no
-  special handling is needed: the next reconcile (launch/resume/mutation)
+  special handling is needed: the next reconcile (launch or mutation)
   recomputes the full desired set and repairs it.
 
 Recurring mutations converge for free: changing a rule or start time
@@ -343,9 +351,9 @@ catches and logs, and the app stays fully usable. The guarantee to the user:
 
 > The application remains usable regardless of scheduling failures. A failed
 > reconcile leaves the previous OS schedule in place (or partially updated);
-> the **next** reconcile — the next launch, resume, or reminder-affecting
-> mutation — recomputes the full desired set and repairs it. Failures are at
-> minimum visible in the debug log.
+> the **next** reconcile — the next launch or reminder-affecting mutation —
+> recomputes the full desired set and repairs it. Failures are at minimum
+> visible in the debug log.
 
 This is deliberately the *floor*, not the ceiling. If Chronicle ever grows a
 diagnostics or sync-status surface, reminder-scheduling failures are a
@@ -432,7 +440,7 @@ are `.context/testing/MANUAL_VERIFICATION.md` MV-001 through MV-004.
 
 - No timers, no polling loops, no background threads. The OS is the
   scheduler.
-- Reconciliation is event-driven (launch, resume, CRUD) and bounded
+- Reconciliation is event-driven (launch, CRUD) and bounded
   (O(reminders in horizon)); never ambient.
 - The bounded horizon caps how many concrete toasts are registered, well
   under the platform's scheduled-toast limit.
@@ -445,12 +453,20 @@ invariant. The contract:
 > Chronicle guarantees reminders within the horizon as of the most recent
 > reconciliation — not indefinitely into the future. A reminder whose fire
 > time is beyond the horizon is scheduled once reconciliation next runs
-> (app launch, resume, or a reminder-relevant mutation).
+> (app launch or a reminder-relevant mutation).
 
 Canonical example: a yearly birthday with a 1-day reminder, on a machine
 where Chronicle stays closed for six months, has no OS-scheduled toast for
 that occurrence until the app next opens and reconciles. Acceptable for the
 MVP; stated so it is a deliberate position, not a surprise.
+
+The same aging applies to a **long-running open session**: because there is
+no time-based or resume trigger, an app left open without any data
+mutation keeps the schedule as of its last reconcile, and the effective
+coverage window shrinks as time passes. With a 60-day horizon this needs
+roughly two months of mutation-free uptime before anything is missed —
+but Chronicle is designed to be left open, so this is a real (if slow)
+gap, not a theoretical one.
 
 ## Scope boundaries
 

@@ -2,8 +2,9 @@
 
 Chronicle's test suite is a five-layer xUnit suite over `Chronicle.Core`. It
 pins the provider-neutral domain — recurrence, storage, the projection/cache
-pipeline, timeline layout, and the recurrence-picker model — so the contracts
-those subsystems expose fail loudly when broken. It is the executable half of
+pipeline (including search and the reminder schedule), timeline layout, and
+the recurrence-picker model — so the contracts those subsystems expose fail
+loudly when broken. It is the executable half of
 the architecture docs: where `architecture/RECURRENCE.md`,
 `architecture/DATA_MODEL.md`, `architecture/USER_INTERFACE.md`, and
 `architecture/CORE_ENGINE.md` state an invariant, this suite enforces it.
@@ -64,8 +65,9 @@ Cheapest, most stable contracts: the calendar's basic language.
 
 Covers `RecurrenceRule` (RRULE parse / canonical round-trip / part
 validation), `RecurrenceExpander` basic expansion, `EventKey`, `EventRef`,
-`Event.Validate`, `EventOverride.Validate`, and `DateHelpers` (grid/week/day
-geometry and the local↔UTC conversions).
+`Event.Validate`, `EventOverride.Validate`, `Reminder.Validate` (plus the
+`OffsetMinutes` derivation), and `DateHelpers` (grid/week/day geometry and
+the local↔UTC conversions).
 
 Enforces: RRULE round-trips to canonical form; unsupported RRULE parts fail
 loudly; `COUNT` and `UNTIL` are mutually exclusive; `BYDAY` is weekly-only,
@@ -116,34 +118,43 @@ provider data flows in. This layer runs against **real SQLite** on isolated
 temp databases — never mocked SQL.
 
 Covers `AppDatabase` (schema init + migration), `CalendarRepository`,
-`EventRepository`, `OverrideRepository`, and `Schema.sql`.
+`EventRepository` (including `SearchCandidatesAsync`), `OverrideRepository`,
+`ReminderRepository`, and `Schema.sql`.
 
 Enforces: schema initializes on a fresh database and re-initializes
 idempotently on a populated one; the recurrence migration is idempotent
 (`RecurrenceRuleJson` → `RecurrenceRule` rename preserves data, recurrence
 columns and the end index are added to legacy databases); calendar / event /
-override CRUD round-trips; deleting a calendar cascade-deletes its events and
-their overrides in one transaction, and deleting an event cascade-deletes its
-overrides; `EventRepository.RefuseOccurrence` rejects any attempt to persist an
+override / reminder CRUD round-trips; deleting a calendar cascade-deletes its
+events, their overrides, and their reminders in one transaction, and deleting
+an event cascade-deletes its overrides and reminders;
+`EventRepository.RefuseOccurrence` rejects any attempt to persist an
 expanded occurrence; EXDATE lists and `TimeZoneId` round-trip with full UTC
 precision; `GetByIdAsync` returns null for a missing row; `GetInRangeAsync`
 includes overlapping standalones (inclusive at both bounds) and recurring
 masters that may still project into the window, and prunes finite series whose
-cached end precedes the range; override upsert preserves one row per
+cached end precedes the range; `SearchCandidatesAsync` matches Title /
+Description case-insensitively including via the `EventOverrides` union;
+override upsert preserves one row per
 `(SeriesEventId, OccurrenceAnchorUtc)` with a stable `Id`, and bulk fetch
 returns every override for the requested series and nothing for empty input;
-`PRAGMA foreign_keys = ON` is enforced (orphan event and orphan override
-inserts are rejected); the `OverrideRepository.UpsertAsync` guards reject
-non-UTC anchor / start / end and end-before-start before any SQL runs.
+`ReminderRepository.SetForEventAsync` replaces the event's whole reminder set
+transactionally (empty list clears; mismatched `EventId` throws before any
+write) and reads return soonest-firing first; `PRAGMA foreign_keys = ON` is
+enforced (orphan event and orphan override inserts are rejected); the
+`OverrideRepository.UpsertAsync` guards reject non-UTC anchor / start / end
+and end-before-start before any SQL runs.
 
 ### Layer 4 — Projection & Cache
 
 The bridge between storage and UI. It protects the single-event-cache model
 and keeps any one consumer from forking the pipeline.
 
-Covers `EventProjection` (the pure projection helper) and the `DateHelpers`
-view ranges, plus an end-to-end integration test that drives the real
-repositories and `EventProjection` together against SQLite.
+Covers `EventProjection` (the pure projection helper — expansion,
+day-grouping, search, and the reminder schedule), the
+`ReminderActivationPayload` codec, and the `DateHelpers` view ranges, plus an
+end-to-end integration test that drives the real repositories and
+`EventProjection` together against SQLite.
 
 Enforces: standalone events pass through unchanged; recurring masters are
 replaced by their expanded occurrences and never appear as themselves;
@@ -153,11 +164,19 @@ list; an empty visibility map treats every calendar as visible and an unlisted
 calendar defaults to visible; `RangeCovered` is true only when the loaded range
 contains the requested one (the invalidation sentinel never covers); Month,
 Week, and Day load ranges match local calendar boundaries; `OrderForDay`
-orders a day all-day-first, then by start instant, ties broken by title. The
-integration test proves the links compose: persisted EXDATE and override rows
-survive serialization and merge onto the masters they expand from, hidden
-calendars drop after load, and series pruned by the range query never reach
-the expander.
+orders a day all-day-first, then by start instant, ties broken by title;
+`SearchOccurrences` expands matching recurring masters and re-filters merged
+occurrences against the query; `ReminderSchedule` emits the occurrence ×
+reminder product (multi-reminder events yield one intent per reminder),
+derives fire times from each occurrence's own start, filters to the window,
+and orders deterministically (fire time, title, reminder id), with
+`GroupRemindersByEvent` bucketing a flat reminder list by `EventId`;
+`ReminderActivationPayload` round-trips master and occurrence identities
+(sub-second anchor precision preserved) and decodes anything malformed to
+null. The integration test proves the links compose: persisted EXDATE and
+override rows survive serialization and merge onto the masters they expand
+from, hidden calendars drop after load, and series pruned by the range query
+never reach the expander.
 
 ### Layer 5 — Thin UI Logic
 
@@ -192,9 +211,14 @@ WinUI host calls into it and owns nothing the seam owns.
   enables `PRAGMA foreign_keys = ON` on every connection.
 - **`Chronicle.Projection.EventProjection`** — the event-pipeline seam:
   `GroupOverridesBySeries`, `ExpandRecurrences` (masters never survive),
-  `GroupVisibleByDay` (visibility filter + day grouping + `OrderForDay`), and
-  `RangeCovered`. `MainWindow` orchestrates the repository reads around it but
-  holds none of this logic.
+  `GroupVisibleByDay` (visibility filter + day grouping + `OrderForDay`),
+  `SearchOccurrences` (the search output shape), `GroupRemindersByEvent` +
+  `ReminderSchedule` (the reminder output shape, consumed by the
+  reconciler), and `RangeCovered`. `MainWindow` orchestrates the repository
+  reads around it but holds none of this logic. (The reminder *delivery*
+  seam, `IReminderScheduler`, lives in the app project on purpose — its
+  implementation talks to the OS and is covered by
+  `testing/MANUAL_VERIFICATION.md`, not this suite.)
 - **`Chronicle.Layout.TimelinePacker`** — the timeline-geometry seam: `Pack`
   returns column/position/height layout as plain data (`PackedEvent`).
   `TimelineRenderHelper` keeps only the `UIElement` building.

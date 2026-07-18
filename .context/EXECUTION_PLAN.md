@@ -47,6 +47,16 @@ anything is built on top of it.
   next month, anchored not paged; PR #17), Year view (4×3 density-tinted
   mini-months, tap-to-drill; PR #17). All reuse the `EventProjection`
   pipeline; suite grew to ~214.
+- Local Baseline Phase C — Reminders. `Reminder` child entity of the
+  `Event` aggregate, projected by `EventProjection.ReminderSchedule`
+  into `ReminderOccurrence[]`, reconciled (clear-and-rebuild) by
+  `ScheduledToastReminderScheduler` into OS-scheduled toasts that fire
+  even when Chronicle is closed; classic-path activation deep-links back
+  to the event via a custom single-instancing `Main`. Full contract in
+  `architecture/REMINDERS.md`; rationale in DECISIONS.md. Suite grew to
+  250; all four manual OS-integration verifications
+  (`testing/MANUAL_VERIFICATION.md` MV-001–004) pass. Merged to main via
+  PR #18 — **Local Baseline Completion is done.**
 
 ### UI CONSTRAINT (TEMPORARY)
 
@@ -78,66 +88,25 @@ calendar to do — not a nice-to-have.
 5. **Year view** — at-a-glance year overview.
 6. **Reminders** — scheduled, reliable, persistence-aware.
 
-### Status (2026-07-14)
+### Status (2026-07-18): Local Baseline Completion is DONE
 
-**Phases A and B are shipped** (merged to main via PRs #15, #16, #17 —
-see Completed above). Their open questions were settled as follows:
-search is SQLite `LIKE` over Title/Description with an in-SQL
-`EventOverrides` union (FTS5 deliberately rejected — rationale and
-revisit triggers in BACKLOG.md "Search backend upgrade"); Agenda is
-anchored today→end-of-next-month with Prev/Next disabled; Year is a
-4×3 density-tinted grid with tap-to-drill.
+All six features are shipped and merged to `main`: PRs #15, #16, #17
+(Phases A/B — see Completed above) and **PR #18 (Phase C — Reminders)**.
+Their open questions were settled as follows: search is SQLite `LIKE`
+over Title/Description with an in-SQL `EventOverrides` union (FTS5
+deliberately rejected — rationale and revisit triggers in BACKLOG.md
+"Search backend upgrade"); Agenda is anchored today→end-of-next-month
+with Prev/Next disabled; Year is a 4×3 density-tinted grid with
+tap-to-drill; Reminders is OS-scheduled toasts with a rolling-horizon
+reconciler (full contract `architecture/REMINDERS.md`, rationale
+DECISIONS.md). Deferred reminder work (snooze/dismiss, multi-reminder
+editor UI, per-occurrence overrides, default reminder) is tracked in
+BACKLOG.md "Reminders."
 
-**Phase C (Reminders) is IN PROGRESS on `feat/local-notifications`.**
-`architecture/REMINDERS.md` owns the subsystem contract — model,
-projection, reconciliation, activation, scope boundaries; rationale is
-in DECISIONS.md ("Reminders: OS-Scheduled Toasts, Reminder as a Child
-Entity" and "Reminder → Notification → Toast Vocabulary"). Read
-REMINDERS.md first. The design in one line: `Reminder` is a child
-entity of the Event aggregate (stored as the user expressed it,
-`(OffsetQuantity, OffsetUnit)`), projected by
-`EventProjection.ReminderSchedule` into `ReminderOccurrence[]`, which
-the sole-owner `ScheduledToastReminderScheduler` reconciles
-(clear-and-rebuild) into OS scheduled toasts that fire even when
-Chronicle is closed.
+Suite is at 250 tests; all four Reminders manual OS-integration
+verifications pass (`testing/MANUAL_VERIFICATION.md` MV-001–004).
 
-Landed on the branch (units 0–4 + registry, suite at 250):
-
-- `4b8aff4` NOTIFICATIONS.md design record (doc-first)
-- `4edb18e` Reminder child entity + schedule projection (unit 1)
-- `38a1dd8` reminder picker in event editor (unit 2)
-- `072370c` single post-mutation chokepoint refactor
-- `ec84d8e` reminder scheduler + reconciliation (unit 3)
-- `d419770` toast activation deep-link + single-instancing (unit 4)
-- `26129a1` manual verification registry (`testing/MANUAL_VERIFICATION.md`)
-
-**Immediate next steps, in order:**
-
-1. **Live verification (DONE).** All of `testing/MANUAL_VERIFICATION.md`
-   passes: MV-001/002 (cold/warm deep-link), MV-003 (single-instance),
-   MV-004 (delivery). The warm path needed two OS-only fixes — decode
-   the activation argument off the UI thread (cross-thread COM), and an
-   explicit `SetForegroundWindow` to raise the window — both in
-   `App.xaml.cs` and recorded in REMINDERS.md "Activation."
-2. **Unit 5 — cross-doc updates (DONE).** DECISIONS.md gained the
-   Phase C rationale-fork entry ("Reminders: OS-Scheduled Toasts,
-   Reminder as a Child Entity" — OS-scheduled over app-scheduled; entity
-   over scalar) plus the "Reminder → Notification → Toast Vocabulary"
-   entry; NOTIFICATIONS.md was renamed to REMINDERS.md, restructured to
-   pure architecture (status/history/spike content removed), and points
-   to DECISIONS as the canonical rationale home. DATA_MODEL.md's
-   core-tables list gained `Reminders` (plus cascade and index notes);
-   BACKLOG.md gained the "Reminders" deferred-work section.
-   AGENT_ONBOARDING.md was already done.
-3. **PR to main (NEXT).** NOTE: `origin/feat/local-notifications` still
-   points at the abandoned scalar-model commit `6d5d9a5` — push with
-   `--force-with-lease`. The scalar work is preserved on local branch
-   `backup/reminders-scalar-model`.
-
-Deferred beyond this branch (recorded in BACKLOG.md "Reminders"):
-snooze/dismiss (`ReminderState` keyed on `(EventRef.Occurrence,
-ReminderId)`), multi-reminder editor UI, per-occurrence reminder
-overrides, default-reminder setting.
+**Next up: Provider Integration Phase** — see below.
 
 ## Recently Completed: Recurrence Phase 2B
 
@@ -281,14 +250,15 @@ Delivered:
 
 ## Next Milestones
 
-Deferred until the Local Baseline milestone is complete.
+The Local Baseline milestone is complete; provider integration is now
+the active milestone.
 
 ### Provider Integration Phase
 
 - Google Calendar (first adapter)
 - Outlook Calendar
 
-Open questions, parked until Phase C completes:
+Open questions, to resolve as this phase starts:
 
 - OAuth + token storage (Windows DPAPI? Settings file? Per-account
   key?).
@@ -320,5 +290,6 @@ Before Google integration begins:
 - Search (Phase B) ✓
 - Agenda view (Phase B) ✓
 - Year view (Phase B) ✓
-- Reminders (Phase C) — in progress on
-  `feat/local-notifications`; see "Status" above
+- Reminders (Phase C) ✓ — merged via PR #18; see "Status" above
+
+**All items satisfied. Google integration is unblocked.**

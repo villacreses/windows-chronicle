@@ -20,12 +20,16 @@ This philosophy is enforced by an assembly boundary, not just
 convention. The repo uses a conventional `src/` + `tests/` layout:
 
 - **`src/Chronicle.Core`** (plain `net8.0`) — the domain: `Models/`,
-  `Data/` (SQLite repositories + `AppDatabase`), `Helpers/DateHelpers`.
-  No WinUI, no WindowsAppSDK. This is the source of truth the rest of
-  the system builds on.
+  `Data/` (SQLite repositories + `AppDatabase`), `Projection/`
+  (`EventProjection` and the reminder projection types), `Layout/`
+  (`TimelinePacker`), `Helpers/DateHelpers`. No WinUI, no
+  WindowsAppSDK. This is the source of truth the rest of the system
+  builds on.
 - **`src/Chronicle`** (WinUI app) — `Views/`, renderers, popovers,
-  `App.xaml`, and the UI-only helpers (`ColorHelper`, `Theme`).
-  References `Chronicle.Core`.
+  `Notifications/` (the toast-delivery adapter behind
+  `IReminderScheduler`), the custom entry point (`Program.cs`,
+  single-instancing), `App.xaml`, and the UI-only helpers
+  (`ColorHelper`, `Theme`). References `Chronicle.Core`.
 - **`tests/Chronicle.Tests`** (xUnit) — references `Chronicle.Core`.
 
 The domain cannot take a dependency on the UI because `Chronicle.Core`
@@ -95,7 +99,17 @@ This is the seam the rest of the engine treats as a black box. RRULE
 parsing, expansion logic, EXDATE handling, overrides, DST resolution,
 and the named invariants are covered in RECURRENCE.md.
 
-## Provider Strategy
+## Reminders
+
+`Reminder` is a child entity of the `Event` aggregate (like
+`EventOverride`): an offset stored as the user expressed it, carried in
+its own table, cascade-deleted with its event. Reminders become
+user-visible through a projection: expanded occurrences × their event's
+reminders → `ReminderOccurrence` fire-time intents, which a reconciler
+converges into OS-scheduled toast notifications that fire even when
+Chronicle is closed. The OS owns delivery — no in-app timer, honoring
+the Idle Cost Budget. The full contract — data model, projection,
+reconciliation, activation, horizon policy — is in REMINDERS.md.
 
 Future providers — Google Calendar, Outlook, Apple Calendar, CalDAV —
 will be implemented as adapters that translate provider entities into
@@ -130,9 +144,12 @@ With the window open and no user interaction:
 - No ambient background refresh loops.
 - No speculative prefetching.
 
-Time-derived visuals (e.g. the now-line) update on a coalesced
-low-frequency tick (≤ 1/minute) and only when the view that consumes
-them is visible.
+Time-derived visuals (e.g. the now-line) are computed at render time
+and refresh only when their view re-renders (view switch, navigation,
+data mutation) — **no timer of any kind currently exists in the app**,
+so the now-line goes stale between renders. If a periodic refresh is
+ever added, the budget's ceiling is a coalesced low-frequency tick
+(≤ 1/minute), active only while the consuming view is visible.
 
 Future provider sync is opt-in and explicitly scheduled with
 user-visible state — never ambient "while app is open" work.
@@ -171,8 +188,9 @@ detailed in USER_INTERFACE.md and DATA_MODEL.md.
 ### No Ambient Background Work
 
 Chronicle does not run background threads. Time-derived UI updates are
-event-driven (resume, view-switch, the coalesced minute tick) and
-self-cancel when their view is hidden. The engine never owns a thread
-pool, a timer chain, or a polling loop. Provider sync, when
+event-driven — they happen when a render happens (view switch,
+navigation, data mutation), never on a schedule; there is currently no
+timer, tick, or resume hook anywhere in the app. The engine never owns
+a thread pool, a timer chain, or a polling loop. Provider sync, when
 introduced, will be scheduled work with explicit user-visible state —
 not an ambient process.

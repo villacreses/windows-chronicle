@@ -143,9 +143,11 @@ Rules:
   allocations per second and issues zero SQLite queries.
 - No timers polling "now," no ambient background refresh loops, no
   speculative prefetching.
-- The clock indicator (and any other time-derived visual) updates on a
-  coalesced low-frequency tick (≤ 1/minute) and only when the view that
-  consumes it is visible.
+- The clock indicator (and any other time-derived visual) may update at
+  most on a coalesced low-frequency tick (≤ 1/minute), and only while the
+  view that consumes it is visible. (Ceiling, not description: no timer
+  currently exists at all — time-derived visuals are computed at render
+  time and refresh only when their view re-renders.)
 - Future provider sync (Google, Outlook) is opt-in and scheduled with
   user-visible state — never ambient "while app is open" work.
 

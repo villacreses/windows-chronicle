@@ -18,9 +18,11 @@ Then inspect the repository.
 Conventional `src/` + `tests/` layout:
 
 - `src/Chronicle.Core/` — pure domain library (`Models/`, `Data/`,
-  `Helpers/DateHelpers`). Plain `net8.0`, no WinUI.
+  `Projection/`, `Layout/`, `Helpers/DateHelpers`). Plain `net8.0`,
+  no WinUI.
 - `src/Chronicle/` — the WinUI 3 app (`Views/`, renderers, popovers,
-  UI helpers). References `Chronicle.Core`.
+  `Notifications/` toast-delivery adapter, custom `Program.cs` entry
+  point, UI helpers). References `Chronicle.Core`.
 - `tests/Chronicle.Tests/` — xUnit, references `Chronicle.Core`.
 
 Solution: `Chronicle.slnx` at the repo root. Build/test with
@@ -63,6 +65,15 @@ Contribution rules:
   *how the system currently behaves* rather than *why this approach
   was chosen*, the operational half belongs in a subsystem doc with
   DECISIONS pointing to it.
+- Feature work is incomplete when the implementation contract changes
+  but the corresponding architectural, UI, testing, or onboarding
+  documentation does not. Update affected `.context` documents as part
+  of the same change. This requires impact assessment, not mechanical
+  edits — most features touch one or two documents, not all of them;
+  the failure mode this rule exists to prevent is the *peripheral*
+  doc (the spine's concept list, the renderer inventory, the testing
+  map) silently drifting while only the subsystem doc gets updated.
+  A doc that no longer matches the implementation is a bug.
 
 ## Summary
 
@@ -72,11 +83,12 @@ The project exists because Windows lacks a compelling vendor-neutral desktop cal
 
 ## Current Strategy
 
-The local calendar foundation is in place (month / week / day views,
-calendar management, recurrence with overrides and wall-clock
-anchoring). The next milestone is **Local Baseline Completion** — six
-features that finish the local experience before any provider
-integration work begins (see `EXECUTION_PLAN.md`).
+**Local Baseline Completion is done** (see `EXECUTION_PLAN.md`
+"Status"): month / week / day views, calendar management, recurrence
+with overrides and wall-clock anchoring, all-day polish, notes, search,
+agenda view, year view, and reminders (OS-scheduled toast
+notifications) are all shipped on `main`. The current milestone is
+**Provider Integrations**, starting with Google Calendar.
 
 Still not prioritized:
 
@@ -100,22 +112,16 @@ Avoid:
 
 ## Current Focus
 
-Local Baseline Completion — six features that finish the local
-calendar experience before provider integration begins:
-
-1. All-day event polish (Phase A)
-2. Notes / description field (Phase A)
-3. Search (Phase B)
-4. Agenda view (Phase B)
-5. Year view (Phase B)
-6. Reminders (Phase C)
-
-See `EXECUTION_PLAN.md` for sequencing rationale and per-phase open
-questions.
+**Provider Integrations**, starting with Google Calendar. See
+`EXECUTION_PLAN.md` "Next Milestones" → "Provider Integration Phase"
+for open questions (OAuth/token storage, sync model, adapter shape,
+conflict resolution, sidebar display of provider calendars) and
+"Definition of Ready for Integrations" for the now-complete
+Local Baseline checklist.
 
 Followed by:
 
-- Provider integrations (Google Calendar first, then Outlook)
+- Outlook Calendar
 - Design overhaul (replaces the dev-only dark-theme override)
 
 ## Important Principle

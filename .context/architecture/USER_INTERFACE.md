@@ -46,9 +46,16 @@ classes under `Views/`.
   range changes (cross-week navigation).
 - `DayViewRenderer` — single-day all-day band over a scrollable 24-hour
   timeline, derived from `_selectedDate`.
+- `AgendaViewRenderer` — chronological upcoming-events list, anchored
+  today → end of next month (not paged); holds its `ScrollViewer` as
+  persistent state (see "Scroll Offset Is View State").
+- `YearViewRenderer` — 4×3 grid of density-tinted mini-months for
+  `_displayMonth`'s year, tap-to-drill into a day.
+- `SearchResultsRenderer` — the results list inside the header search
+  box's flyout; rows deep-link to the result's day.
 - `MiniMonthRenderer` — compact sidebar month navigator.
 - `SelectedDayRenderer` — selected-day detail panel (date, event count,
-  event list, empty state).
+  event list with description peek, empty state).
 - `SidebarRenderer` — calendar list, visibility toggles, and the add /
   edit / delete calendar affordances.
 - `TimelineRenderHelper` — stateless helper that builds a single day's
@@ -68,19 +75,23 @@ classes under `Views/`.
   button forwards to `EventEditPopover` via the host.
 - `Views/Popovers/EventEditPopover` — light-dismiss create/edit event
   editor: a static helper that shows a programmatic form (name,
-  calendar, start/end date+time, Repeats picker, Ends picker) in a
-  `Flyout` anchored to a window point. Two entry points:
+  calendar, start/end date+time, all-day toggle, Notes box, Repeats
+  picker, Ends picker, Remind-me picker) in a `Flyout` anchored to a
+  window point. Two entry points:
   - `ShowCreateEventAsync` / `ShowEditEventAsync` — master-edit form,
-    includes the Repeats picker, defaults `TimeZoneId` on the create
-    path.
+    includes the Repeats picker and the Remind-me picker, defaults
+    `TimeZoneId` on the create path.
   - `ShowEditOccurrenceAsync` — stripped form for the This-event scope:
-    no Calendar, no Repeats picker, no recurring banner.
+    no Calendar, no Repeats picker, no Remind-me picker (an occurrence
+    inherits the series reminders), no recurring banner. Returns the
+    edited `Event` or `null`.
 
-  Returns the resulting `Event` on save or `null` on cancel/dismiss.
-  `EventEditPopover` is the sole event-editing UI — it builds and
-  returns the `Event` only; `MainWindow` persists via
-  `EventRepository` (master path) or `OverrideRepository` (the
-  occurrence-edit branch).
+  The master-path entry points return an `EventEditResult` (the built
+  `Event` plus the chosen reminder set, 0..1 from the editor) or `null`
+  on cancel/dismiss. `EventEditPopover` is the sole event-editing UI —
+  it builds and returns; `MainWindow` persists via `EventRepository` +
+  `ReminderRepository.SetForEventAsync` (master path) or
+  `OverrideRepository` (the occurrence-edit branch).
 
 Shared date and color conversions live in `Helpers/` (`DateHelpers`,
 `ColorHelper`) so renderers don't duplicate them.
@@ -113,7 +124,8 @@ separate on purpose:
   render.
 - `_selectedDate` — the user's focused calendar day. Defaults to
   today.
-- `_currentView` (`Month` | `Week` | `Day`) — the active main view.
+- `_currentView` (`Month` | `Week` | `Day` | `Agenda` | `Year`) — the
+  active main view.
 
 `_currentView` is a display mode, not date state. Week View *derives*
 its visible week from `_selectedDate` via `DateHelpers.BuildWeek`, and
@@ -129,9 +141,11 @@ current month and `_selectedDate` is set to today's local day key.
 
 ## View Switching
 
-`SwitchView` sets `_currentView`, toggles `MonthViewRoot` /
-`WeekViewRoot` / `DayViewRoot` visibility, syncs the toggle buttons,
-and calls `RefreshActiveViewAsync`. It introduces no new date state.
+`SwitchView` sets `_currentView`, toggles the five view roots'
+visibility (`MonthViewRoot` / `WeekViewRoot` / `DayViewRoot` /
+`AgendaViewRoot` / `YearViewRoot` — via `ApplyViewMode`), syncs the
+toggle buttons, and calls `RefreshActiveViewAsync`. It introduces no
+new date state.
 
 **View switching within the loaded range issues zero SQLite queries.**
 `_eventsByDate` is the shared event store and is refilled only when
@@ -240,9 +254,14 @@ Both flows enforce the persistence boundary via
 `EventRepository.RefuseOccurrence` at the repository chokepoint.
 
 Calendar create / edit / delete, event delete, and event dialog
-completion reload the active view's data without changing navigation
-state (`RefreshActiveViewAsync` for the existing range, not a new
-range).
+completion all funnel through `AfterDataMutationAsync` — the single
+"persisted calendar data changed" chokepoint. It reloads the active
+view's data without changing navigation state (`RefreshActiveViewAsync`
+for the existing range, not a new range), then runs downstream
+consumers of the mutation — currently the reminder-schedule
+reconciliation (`ReconcileRemindersAsync`, see
+`architecture/REMINDERS.md`). Launch funnels through the same
+chokepoint via `ReloadCalendarsAndRefreshAsync`.
 
 Calendar **visibility** toggles are different: visibility is a
 client-side filter held only in `MainWindow._calendarVisibility` (a
