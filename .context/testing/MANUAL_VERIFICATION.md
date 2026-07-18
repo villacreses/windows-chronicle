@@ -37,7 +37,7 @@ load-bearing, not ceremony — and a hint at the class of bug it guards. Keep
 each line to a date and the finding; name the fix's home doc if it has one.
 
 Related: `.context/TESTING.md` (the automated test architecture) and
-`architecture/NOTIFICATIONS.md` (the reminder subsystem these entries cover).
+`architecture/REMINDERS.md` (the reminder subsystem these entries cover).
 
 ---
 
@@ -75,11 +75,11 @@ navigates to the event's day, and opens the event.
 - 2026-07: Revealed cross-thread COM access on the redirected warm path —
   reading the WinRT activation `.Data` after marshaling it to the UI thread
   threw `COMException` (RPC_E_WRONG_THREAD). Fix: decode the argument on the
-  activation's own thread. See NOTIFICATIONS.md "Activation."
+  activation's own thread. See REMINDERS.md "Activation."
 - 2026-07: Revealed the window not raising to the foreground — the primary
   instance holds no foreground rights, so `AppWindow.Show()`/`Activate()`
   weren't enough. Fix: Win32 `SetForegroundWindow` (+ restore if minimized).
-  See NOTIFICATIONS.md "Activation."
+  See REMINDERS.md "Activation."
 
 ---
 

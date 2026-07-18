@@ -74,7 +74,7 @@ ON EventOverrides(OccurrenceAnchorUtc);
 -- transactions, never referenced from outside the aggregate. The offset
 -- is stored as the user expressed it — (Quantity, Unit), never a
 -- normalized minute count. Units are fixed durations only
--- ('Minutes' | 'Hours' | 'Days' | 'Weeks'); see NOTIFICATIONS.md.
+-- ('Minutes' | 'Hours' | 'Days' | 'Weeks'); see REMINDERS.md.
 CREATE TABLE IF NOT EXISTS Reminders (
     Id TEXT PRIMARY KEY,
 

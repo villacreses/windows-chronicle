@@ -20,7 +20,7 @@ namespace Chronicle.Projection;
 ///   toast is a per-reminder, per-occurrence intent.</item>
 /// </list>
 /// The full identity travels in the toast's launch arguments; the short OS
-/// tag/group is only for group-clear (see NOTIFICATIONS.md).
+/// tag/group is only for group-clear (see REMINDERS.md).
 /// </summary>
 public sealed record ReminderOccurrence(
     EventRef Ref,

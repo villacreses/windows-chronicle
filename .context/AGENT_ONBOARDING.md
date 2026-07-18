@@ -9,7 +9,7 @@ Read files in this order:
 
 Read the subsystem docs (`architecture/DATA_MODEL.md`,
 `architecture/USER_INTERFACE.md`, `architecture/RECURRENCE.md`,
-`architecture/NOTIFICATIONS.md`) when your work touches that subsystem.
+`architecture/REMINDERS.md`) when your work touches that subsystem.
 
 Then inspect the repository.
 
@@ -41,12 +41,10 @@ keep coherent.
   read coherently, and points to subsystem docs for depth. It never
   duplicates subsystem detail.
 - **`architecture/DATA_MODEL.md`**, **`architecture/USER_INTERFACE.md`**,
-  **`architecture/RECURRENCE.md`**, **`architecture/NOTIFICATIONS.md`**
+  **`architecture/RECURRENCE.md`**, **`architecture/REMINDERS.md`**
   own the full contract for their subsystem — invariants, mutation
   shapes, correctness rules, operational semantics. Read the one that
-  matches what you are touching. NOTIFICATIONS.md is a living design
-  doc written alongside the Phase C build, with a status table for
-  what has landed vs. what is designed.
+  matches what you are touching.
 - **`DECISIONS.md`** records *why* — alternatives weighed, tradeoffs,
   product positions. Not contracts. A fact stays here only if it
   would survive a complete rewrite of the relevant subsystem.
@@ -110,7 +108,7 @@ calendar experience before provider integration begins:
 3. Search (Phase B)
 4. Agenda view (Phase B)
 5. Year view (Phase B)
-6. Notifications / reminders (Phase C)
+6. Reminders (Phase C)
 
 See `EXECUTION_PLAN.md` for sequencing rationale and per-phase open
 questions.

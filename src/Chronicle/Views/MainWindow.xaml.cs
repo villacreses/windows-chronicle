@@ -1119,7 +1119,7 @@ namespace Chronicle
 
         // ── Reminder schedule reconciliation ──────────────────────────────────
 
-        // Horizon policy (NOTIFICATIONS.md): schedule reminders whose fire time
+        // Horizon policy (REMINDERS.md): schedule reminders whose fire time
         // falls within this window from now. A tunable policy, not an invariant.
         private static readonly TimeSpan ReminderHorizon = TimeSpan.FromDays(60);
 
@@ -1143,7 +1143,7 @@ namespace Chronicle
         /// <see cref="EventProjection.ReminderSchedule"/>); it duplicates no
         /// projection logic.
         ///
-        /// Failure contract (NOTIFICATIONS.md): a scheduling failure must never
+        /// Failure contract (REMINDERS.md): a scheduling failure must never
         /// abort the mutation that triggered it. Failures are caught and logged;
         /// the app stays usable and the next reconcile repairs the schedule. If
         /// Chronicle grows a diagnostics/sync-status surface, reminder failures

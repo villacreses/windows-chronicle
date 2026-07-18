@@ -71,7 +71,7 @@ public static class EventEditPopover
         => RecurrenceTimeZone.NormalizeToIana(TimeZoneInfo.Local.Id);
 
     // "Remind me" presets, stored as the user's expressed offset (quantity +
-    // unit), never normalized to minutes — see NOTIFICATIONS.md. Quantity
+    // unit), never normalized to minutes — see REMINDERS.md. Quantity
     // null = "No reminder". The editor exposes one reminder; the domain and
     // the write path support a set of any size. Shown only on the master /
     // standalone path — per-occurrence reminder overrides are deferred, so an
@@ -115,7 +115,7 @@ public static class EventEditPopover
     // offset mints a new identity (a changed offset is a new intent).
     // The mutate-vs-replace question for offset edits becomes load-bearing
     // only when something external keys on reminder identity (Stage 2's
-    // ReminderState) — see NOTIFICATIONS.md "Reminder identity across
+    // ReminderState) — see REMINDERS.md "Reminder identity across
     // saves."
     private static List<Reminder> ReadReminderSet(
         ComboBox combo,

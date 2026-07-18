@@ -13,6 +13,25 @@
 - Holiday calendars
 - Birthdays
 
+## Reminders
+
+Deferred beyond the Local Baseline reminder MVP (subsystem contract in
+`architecture/REMINDERS.md`):
+
+- Snooze / dismiss — a `ReminderState` table keyed on
+  `(EventRef.Occurrence, ReminderId)`, interactive toast buttons,
+  background activation. Likely its own branch. This state lives *outside*
+  the `Reminder` entity, which stays pure domain (no notification state).
+  Related open question recorded in REMINDERS.md "Reminder identity across
+  saves": whether an offset change should preserve reminder identity
+  becomes load-bearing once `ReminderState` keys on it.
+- Multi-reminder editor UI — "Add reminder" collection rows. The domain,
+  persistence, and projection already handle N reminders per event; this
+  is editor work only.
+- Per-occurrence reminder overrides.
+- Default-reminder setting for new events.
+- Non-toast notification channels.
+
 ## Integrations
 
 - Apple Calendar

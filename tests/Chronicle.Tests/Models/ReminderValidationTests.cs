@@ -7,7 +7,7 @@ namespace Chronicle.Tests.Models;
 /// <see cref="Reminder"/> is a pure domain child of the Event aggregate:
 /// a stored-as-expressed offset (quantity + unit) with a derived minute
 /// value. These tests pin the validation boundary and the fixed-duration
-/// arithmetic (see NOTIFICATIONS.md "Offsets are fixed durations").
+/// arithmetic (see REMINDERS.md "Offsets are fixed durations").
 /// </summary>
 public class ReminderValidationTests
 {

@@ -26,7 +26,7 @@ namespace Chronicle.Notifications;
 internal sealed class ScheduledToastReminderScheduler : IReminderScheduler
 {
     // One reserved OS group; its entire contents are this scheduler's
-    // disposable cache (see NOTIFICATIONS.md).
+    // disposable cache (see REMINDERS.md).
     private const string Group = "chronicle-reminders";
 
     // The IReminderScheduler contract's "bounded" clause, realized: an

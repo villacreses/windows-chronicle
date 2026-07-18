@@ -17,7 +17,7 @@ namespace Chronicle;
 /// <see cref="Application.Start"/> — never in <c>App.OnLaunched</c>.
 /// Redirecting from OnLaunched deadlocks the XAML STA thread with a
 /// COMException (learned in the Phase C activation spike). See
-/// NOTIFICATIONS.md "Single-instancing."
+/// REMINDERS.md "Single-instancing."
 /// </summary>
 public static class Program
 {

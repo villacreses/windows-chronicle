@@ -93,7 +93,7 @@ Six features that finish the local experience before provider integration begins
 - Search
 - Agenda view
 - Year view
-- Notifications / reminders
+- Reminders
 
 ### Planned Integrations
 
@@ -160,4 +160,4 @@ Provide a modern, native calendar experience for Windows.
 
 Active development.
 
-Current focus: completing the Local Baseline (all-day polish, notes, search, agenda view, year view, notifications) before beginning provider integrations.
+Current focus: completing the Local Baseline (all-day polish, notes, search, agenda view, year view, reminders) before beginning provider integrations.

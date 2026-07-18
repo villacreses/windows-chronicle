@@ -6,10 +6,10 @@ namespace Chronicle.Projection;
 
 /// <summary>
 /// The wire format for a scheduled reminder's identity as it travels in a
-/// toast's launch arguments — written by the notification scheduler (Unit 3)
-/// and read back by activation handling (Unit 4). This is pure identity
-/// serialization, not a Windows API concern, so it lives in Core where both
-/// sides can share one canonical format and it can be unit-tested.
+/// toast's launch arguments — written by the notification scheduler and
+/// read back by activation handling. This is pure identity serialization,
+/// not a Windows API concern, so it lives in Core where both sides can
+/// share one canonical format and it can be unit-tested.
 ///
 /// A scheduled toast is identified by <c>(EventRef, ReminderId)</c> — the
 /// occurrence it belongs to plus which reminder on that occurrence (an

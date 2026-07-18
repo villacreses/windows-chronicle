@@ -9,7 +9,7 @@ namespace Chronicle.Data.Repositories;
 
 /// <summary>
 /// Persistence for <see cref="Reminder"/> rows — composed children of the
-/// <see cref="Event"/> aggregate (see NOTIFICATIONS.md). Mirrors
+/// <see cref="Event"/> aggregate (see REMINDERS.md). Mirrors
 /// <see cref="OverrideRepository"/>'s shape: bulk fetch keyed by the owning
 /// event, cascade helpers invoked from the event / calendar delete
 /// transactions, and no independent lifecycle beyond the aggregate.

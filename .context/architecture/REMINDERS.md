@@ -1,36 +1,25 @@
-# Notifications / Reminders
+# Reminders
 
 Chronicle delivers event reminders as Windows toast notifications that the
-OS fires on schedule — including when Chronicle is closed. This document is
-the living design record for the subsystem: the model, the rationale, the
-spike findings that shaped it, the reconciliation contract, and the
-deliberate deferrals. It is written alongside the implementation, not after
-it.
+OS fires on schedule — including when Chronicle is closed. This document
+owns the reminder subsystem's contract: the model, the projection, the
+reconciliation contract, activation, and the subsystem's scope boundaries.
 
-## Implementation status
+## Vocabulary
 
-Local Baseline Phase C, on branch `feat/local-notifications`. Built in
-units; this doc tracks which have landed. (The domain model was corrected
-from a scalar column to a child entity before implementation proceeded —
-see "Design history" below; the branch was rebuilt on the entity model.)
+Three concepts, three words — never interchangeable (canonical rationale in
+DECISIONS.md "Reminder → Notification → Toast Vocabulary"):
 
-| Unit | Scope | Status |
-|------|-------|--------|
-| 1 | `Reminder` child entity + `Reminders` table + repository + `EventProjection.ReminderSchedule` + `ReminderOccurrence` | **landed** |
-| 2 | "Remind me" picker in `EventEditPopover` (one reminder, master path) | **landed** |
-| 3 | `IReminderScheduler` seam + toast adapter + reconciler wired to launch/CRUD | **landed** — verified live (MV-004 delivery passes) |
-| 4 | Custom `Main` single-instancing + classic toast activation → deep-link | **landed** — verified live (MV-001/002/003 pass; two warm-path fixes, see Activation) |
-| 5 | Cross-doc updates (DECISIONS / DATA_MODEL / AGENT_ONBOARDING) | planned (AGENT_ONBOARDING done) |
+- **Reminder** — a domain entity tied to an event ("remind me 10 minutes
+  before"). The cause.
+- **Notification** — a user-facing message Chronicle surfaces. The effect a
+  reminder triggers.
+- **Toast** — one Windows mechanism for presenting a notification.
 
-Anything marked *planned* is designed here but not yet in the code.
-
-**Live verification complete.** All of `.context/testing/MANUAL_VERIFICATION.md`
-passes: MV-001 (cold deep-link), MV-002 (warm deep-link), MV-003 (non-toast
-single-instance relaunch), MV-004 (OS delivery). The warm path needed two
-fixes surfaced only against the real OS: decoding the launch argument on the
-activation's own thread, and an explicit `SetForegroundWindow` to raise the
-window (both recorded under *Activation*). Remaining before merge: unit 5
-(DECISIONS / DATA_MODEL).
+A reminder *is not* a notification, just as it is not a toast. Reminders
+are today's only notification producer; the delivery layer
+(`src/Chronicle/Notifications/`) is named for its responsibility —
+delivering notifications — not for its current sole consumer.
 
 ## Architectural model
 
@@ -56,18 +45,18 @@ EventProjection.ReminderSchedule(occurrences, remindersByEventId, window)
         ▼
 ReminderOccurrence*            (EventRef, ReminderId, FireTimeUtc, EventStartTimeUtc, Title)
         │
-        │  IReminderScheduler.Reconcile(desired)      [planned, unit 3]
+        │  IReminderScheduler.Reconcile(desired)
         ▼
 Windows scheduled toasts       (disposable cache in one reserved OS group)
         │
-        │  user clicks a toast                        [planned, unit 4]
+        │  user clicks a toast
         ▼
 classic activation → decode EventRef → focus window + open the event
 ```
 
-**Notifications are not a special subsystem — they are another projection
-over the calendar model.** Expanded occurrences fan out to every consumer;
-the reminder projection is one branch among peers:
+**Reminders are not a special subsystem — they are another projection over
+the calendar model.** Expanded occurrences fan out to every consumer; the
+reminder projection is one branch among peers:
 
 ```
 Expanded occurrences
@@ -84,6 +73,10 @@ were watching for that `EventProjection`, not `_eventsByDate`, is the
 stable seam.
 
 ## Why OS-scheduled toasts (`ScheduledToastNotification`)
+
+*Decision rationale — including the app-owned-scheduler alternative — is
+recorded canonically in DECISIONS.md "Reminders: OS-Scheduled Toasts,
+Reminder as a Child Entity." This section states the resulting position.*
 
 Chronicle schedules concrete future toasts with the Windows notification
 platform (`ToastNotifier.AddToSchedule`) and lets the OS deliver them. It
@@ -244,13 +237,13 @@ and re-inserts the row (the write is a set-replace), but the editor carries
 the prior `Id` forward when the offset is unchanged, so the *entity's*
 identity is stable across unrelated edits even though the *row* is rewritten.
 
-**Deferred:** whether an offset *change* should mutate the existing reminder
-in place (preserving `Id`) rather than mint a new one. This becomes
-load-bearing only when something external keys on reminder identity —
-specifically Stage 2's `ReminderState` (snooze/dismiss). Until then, "changed
-offset = new identity" is correct and simplest: a snooze set against an
-old offset should not silently apply to a re-timed reminder anyway. Revisit
-when Stage 2 lands.
+**Open question:** whether an offset *change* should mutate the existing
+reminder in place (preserving `Id`) rather than mint a new one. This becomes
+load-bearing only when something external keys on reminder identity — the
+deferred snooze/dismiss `ReminderState` (BACKLOG.md "Reminders"). Until
+then, "changed offset = new identity" is correct and simplest: a snooze set
+against an old offset should not silently apply to a re-timed reminder
+anyway. Revisit when snooze/dismiss is built.
 
 ## Editor scope vs. domain capability
 
@@ -282,10 +275,10 @@ schedule toward the projection's current output.
   per-calendar, not per-horizon — because reconciliation always recomputes
   the full horizon set from Chronicle state.
 - **Clear-and-rebuild.** Each reconcile clears the group and re-adds the
-  desired set. Required, not merely convenient: the spike proved
-  `AddToSchedule` is purely additive (see *Spike findings*), so stale
-  toasts must be removed explicitly. A surgical diff is a later
-  optimization that does not change the contract.
+  desired set. Required, not merely convenient: `AddToSchedule` is purely
+  additive — the same tag/id scheduled twice yields two toasts; the OS does
+  not dedupe — so stale toasts must be removed explicitly. A surgical diff
+  is a later optimization that does not change the contract.
 - **Reconciliation is the sole mutator of the OS schedule.** The editor,
   repositories, and event services mutate *Chronicle state* and then
   *request a reconcile*; only the scheduler calls `AddToSchedule` /
@@ -314,7 +307,7 @@ Recurring mutations converge for free: changing a rule or start time
 changes the walk anchors, hence the `EventRef` keys, so old intents leave
 the desired set and new ones enter it.
 
-### As implemented (unit 3)
+### Reconciler shape
 
 - **Two layers, two single-responsibilities.** `MainWindow.ReconcileRemindersAsync`
   is the single *compute* site — it runs its own load over the horizon
@@ -362,11 +355,14 @@ adapter.
 
 ## Activation
 
-Validated by the spike: a clicked scheduled toast activates through the
-**classic** path — `AppInstance.GetCurrent().GetActivatedEventArgs()`
-returns `ExtendedActivationKind.ToastNotification` with the launch argument
-intact. `AppNotificationManager.NotificationInvoked` is not involved, and no
-manifest COM-activator declaration is required for a packaged app.
+A clicked scheduled toast activates through the **classic** path —
+`AppInstance.GetCurrent().GetActivatedEventArgs()` returns
+`ExtendedActivationKind.ToastNotification` with the launch argument intact,
+for both cold launches and warm clicks. The modern
+`AppNotificationManager.NotificationInvoked` is not involved, and no
+manifest COM-activator declaration is required for a packaged app
+(`AppNotificationManager.Register()` in fact *fails* without one — "No COM
+servers are registered" — and is simply not needed on the classic path).
 
 **Activation is translation, not logic.** Its sole job is to turn an OS
 activation into the *existing* Chronicle navigation model. It knows nothing
@@ -399,7 +395,7 @@ Toast activation
   the primary instance registers a key and routes redirected activations into
   `App.OnRedirectedActivation`; a secondary instance redirects and exits.
   Doing the redirect in `OnLaunched` deadlocks the XAML STA thread with a
-  `COMException` (learned during the spike), which is why it must be in Main.
+  `COMException`, which is why it must be in Main.
 - **Two entry points, one handler.** A cold toast-launch is handled in
   `App.OnLaunched` (via `GetActivatedEventArgs`); a warm toast-click (app
   already open) arrives through the primary instance's `Activated` event and
@@ -414,8 +410,8 @@ Toast activation
   string out on the background thread (`ExtractToastArgument`) and marshals
   only that `string?`; `HandleActivation` takes the string, never the WinRT
   args. The cold path (`OnLaunched`) extracts on the UI thread, where
-  `GetActivatedEventArgs()` was already valid. (Found live at MV-002; the cold
-  path MV-001 never hit it because both ends were the UI thread.)
+  `GetActivatedEventArgs()` was already valid — which is why the cold path
+  never exhibits this failure: both ends are the UI thread.
 - **Focus needs `SetForegroundWindow`, not just `Activate()`.** The warm path
   runs on the *primary* instance, which does not hold foreground rights, so a
   background-owned window will not raise from `AppWindow.Show()` /
@@ -426,25 +422,11 @@ Toast activation
   force `AllowUnsafeBlocks` across the whole app project for three trivial
   calls; the app project isn't AOT-marked). The toast-redirect path carries
   enough foreground rights for a plain `SetForegroundWindow` to take; the
-  `AttachThreadInput` bypass was not needed. (Found live at MV-002.)
+  `AttachThreadInput` bypass is not needed.
 
-## Spike findings (empirical record)
-
-A throwaway spike validated the activation mechanics against the real OS
-before any reconciler was built. Removed from the tree; its conclusions:
-
-1. **Activation path = classic.** `GetActivatedEventArgs()` delivers
-   `ToastNotification` kind with the argument; modern `NotificationInvoked`
-   does not fire.
-2. **Payload round-trips.** `occ|<guid>|<ticks>` reconstructed to
-   `EventRef.Occurrence` exactly, including a UTC anchor.
-3. **Cold launch works.** A toast click launches the closed app with args.
-4. **`AppNotificationManager.Register()` fails** in the packaged app
-   ("No COM servers are registered") without a manifest COM-activator —
-   **and is not needed.** Classic scheduling + activation work with no
-   manifest change. This *simplified* the design.
-5. **`AddToSchedule` is purely additive.** Same tag/id scheduled twice
-   yields two toasts; the OS does not dedupe. Hence clear-and-rebuild.
+These platform behaviors cannot be exercised by the automated suite (they
+live outside the process the test host can drive); their reproduction steps
+are `.context/testing/MANUAL_VERIFICATION.md` MV-001 through MV-004.
 
 ## Idle Cost Budget compliance
 
@@ -470,47 +452,23 @@ where Chronicle stays closed for six months, has no OS-scheduled toast for
 that occurrence until the app next opens and reconciles. Acceptable for the
 MVP; stated so it is a deliberate position, not a surprise.
 
-## Deliberate deferrals
+## Scope boundaries
+
+What the subsystem deliberately does not do. (The larger deferrals are
+tracked in `BACKLOG.md` "Reminders"; the scalar-vs-entity design rationale
+is in DECISIONS.md "Reminders: OS-Scheduled Toasts, Reminder as a Child
+Entity.")
 
 - **Editor exposes one reminder; the domain supports many.** See "Editor
   scope vs. domain capability" above — the single-reminder dropdown is a UI
   limitation, not a domain constraint, and growing it is a UI change with no
   persistence or projection redesign.
-- **No snooze / dismiss.** Stage 1 is fire-only. Snooze/dismiss (a
-  `ReminderState` table keyed on `(EventRef.Occurrence, ReminderId)`,
-  interactive toast buttons, background activation) is Stage 2, likely a
-  separate branch. Note this state lives *outside* `Reminder` — the reminder
-  entity stays pure.
+- **Fire-only — no snooze / dismiss.** When built, that state lives
+  *outside* `Reminder` (see BACKLOG.md) — the reminder entity stays pure.
 - **No per-occurrence reminder overrides.** An occurrence inherits the
   series reminders. The occurrence-scoped editor omits the picker.
 - **No default reminder.** New events are silent unless the user opts in.
-- **No email/other reminder methods.** Toast only.
-
-## Design history: scalar → child entity
-
-The subsystem was first designed with a scalar `Events.ReminderMinutesBefore`
-column, on the grounds that a single reminder is a derived scalar and a
-table would be speculative structure. That was reconsidered and **reversed
-before the model shipped**, for three reasons:
-
-1. **Preserving the user's representation already breaks the scalar.**
-   Storing "2 weeks" faithfully requires structured `(Quantity, Unit)` data;
-   normalized minutes lose intent. Once the value is structured, a child
-   collection is a small further step.
-2. **Single-reminder is an artificial constraint, not a faithful model.**
-   Multiple reminders are table stakes for a real calendar (Chronicle's
-   stated goal). The scalar encodes "≤ 1 reminder" as a structural
-   invariant the domain does not actually have.
-3. **The expensive migration is the API reshape, not the SQL.** Moving
-   every read site from `event.ReminderMinutesBefore` (scalar) to
-   `event.Reminders` (collection) only gets costlier as more units build on
-   it. The correction was made at the cheapest moment — units 1–2, on an
-   unmerged branch.
-
-`Reminder` is modeled as a child entity of the `Event` aggregate (like
-`EventOverride`), **not** an independent root: cascade-owned, never
-referenced externally, loaded as a side collection. This keeps "first-class
-domain concept" from sprawling into an independent service layer.
+- **Toast only.** No email or other notification channels.
 
 ## Assembly boundary and the platform principle
 
@@ -529,7 +487,7 @@ Applied here: pure parts live in `Chronicle.Core` and are unit-tested — the
 load by event, cascade helpers), `EventProjection.ReminderSchedule` producing
 `ReminderOccurrence`, and the `ReminderActivationPayload` codec (pure identity
 serialization, shared by the scheduler and activation). These carry no
-notification concepts. The notification subsystem's platform APIs
+notification concepts. The notification-delivery layer's platform APIs
 (`Windows.UI.Notifications`) live in `src/Chronicle` in exactly one place —
 `ScheduledToastReminderScheduler`, behind the `IReminderScheduler` seam. That
 `ScheduledToastReminderScheduler` depends directly on `Windows.UI.Notifications`

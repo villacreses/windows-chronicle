@@ -504,3 +504,133 @@ dependencies, so consistent with "No New Dependencies"):
 
 Operational detail (test project shape, Layer 3 parallelism caveat,
 Schema.sql propagation) lives in `.context/TESTING.md`.
+
+---
+
+## Reminders: OS-Scheduled Toasts, Reminder as a Child Entity (2026-07-18)
+
+Local Baseline Phase C delivers event reminders as Windows toast
+notifications the OS fires on schedule — including while Chronicle is
+closed. The operational contract — data model, the `ReminderSchedule`
+projection, the reconciliation contract, activation, horizon policy, and the
+scope boundaries — lives in `architecture/REMINDERS.md`. The entries below
+capture only the two decisions that had real alternatives, and why each fork
+was taken.
+
+### OS-scheduled toasts over an app-owned scheduler
+
+Chronicle registers concrete future toasts with the Windows notification
+platform (`ScheduledToastNotification` / `ToastNotifier.AddToSchedule`) and
+lets the OS deliver them. It runs no in-app timer, polling loop, or
+background service.
+
+The decision does **not** rest on idle-cost minimization. It rests on two
+facts:
+
+- The modern `AppNotificationManager` (Windows App SDK) is a show-*now* API
+  with no scheduling equivalent — it cannot register a future toast.
+- A reminder must fire while Chronicle is closed. That is a product
+  requirement: an unreliable reminder erodes trust more than a missing
+  feature does.
+
+Together these reduce the real choice to *OS-owned scheduling vs. building a
+scheduler ourselves*. The modern APIs were rejected because they do not
+schedule, **not** because they are slower. The Idle Cost Budget permits
+explicitly-scheduled future work; only continuous observation is banned.
+Handing the schedule to the OS is the purest form of permitted scheduling —
+Chronicle keeps no handle, thread, or timer.
+
+The app-owned alternative was rejected because firing a reminder while
+Chronicle is closed would require either a background process (a standing
+idle cost, and a moving part that fails silently) or a scheduled relaunch of
+Chronicle itself — both strictly worse than a schedule the OS already
+maintains reliably. The spike also found that classic `ScheduledToastNotification`
+scheduling and activation need **no** manifest COM-activator in a packaged
+app, so the OS-owned path carried no offsetting complexity cost.
+
+### `Reminder` as a child entity, not a scalar column
+
+`Reminder` is a composed child of the `Event` aggregate — its own table,
+cascade-owned, loaded as a side collection, like `EventOverride` — storing
+the user's expressed offset as `(OffsetQuantity, OffsetUnit)`.
+
+The subsystem was first designed with a scalar `Events.ReminderMinutesBefore`
+column, on the theory that a single reminder is a derived scalar and a table
+would be speculative structure. That was reversed **before the model
+shipped** — still on the unmerged branch, at units 1–2 — for three reasons:
+
+- **Preserving the user's representation already breaks the scalar.** Storing
+  "2 weeks before" faithfully needs structured `(Quantity, Unit)` data;
+  normalized minutes lose intent (is `10080` "1 week" or "7 days"?). Once the
+  value is structured, a child collection is a small further step. This is
+  the same principle Chronicle already applies by storing RRULE rather than a
+  materialized date list, and by keeping the recurrence anchor zone
+  authoritative rather than normalizing to UTC.
+- **Single-reminder is an artificial constraint, not a faithful model.**
+  Multiple reminders per event are table stakes for a real calendar. The
+  scalar encodes "≤ 1 reminder" as a structural invariant the domain does not
+  actually have (the editor exposing one reminder is a UI limitation, not a
+  domain constraint).
+- **The expensive migration is the API reshape, not the SQL.** Moving every
+  read site from a scalar to a collection only gets costlier as more units
+  build on it; making the correction at units 1–2 was the cheapest moment.
+
+`Reminder` is a child entity, deliberately **not** an independent root:
+cascade-owned, never referenced externally, keyed by `EventId`. This keeps
+"first-class domain concept" from sprawling into an independent service
+layer. It carries **no** notification state (no toast id, no last-fired, no
+snooze) — that state belongs to the notification pipeline, and a future
+snooze/dismiss `ReminderState` (see `BACKLOG.md` "Reminders") will live
+*outside* `Reminder` so the entity stays pure. The operational contract is
+in `architecture/REMINDERS.md` "Data model."
+
+---
+
+## Reminder → Notification → Toast Vocabulary (2026-07-18)
+
+Early Phase C writing used "Notifications" and "Reminders" interchangeably
+as the feature name. That conflated three concepts that vary independently,
+and the vocabulary is now settled:
+
+- **Reminder** — a domain entity tied to an event ("remind me 10 minutes
+  before this event"). The cause.
+- **Notification** — a user-facing message Chronicle surfaces. The effect a
+  reminder triggers.
+- **Toast** — one Windows mechanism for presenting a notification.
+
+A reminder *causes* a notification, which today happens to be *delivered*
+as a Windows toast. A reminder is not a notification, just as it is not a
+toast.
+
+The boundaries earn their keep independently. Reminder ≠ notification:
+reminders are plausibly not the only notification producer Chronicle will
+ever have (sync failures, import/backup completion, update available — all
+notifications, none reminders). Notification ≠ toast: those future producers
+carry different delivery semantics (show-now vs. reminder's scheduled
+future delivery), and not every notification should even be a Windows toast
+(a sync failure is plausibly an in-app status surface).
+
+Naming consequences, decided deliberately:
+
+- **Namespaces name responsibilities; architecture docs name subjects.**
+- `src/Chronicle/Notifications/` (the delivery layer) keeps its generic
+  name even while reminders are its only consumer — its responsibility is
+  delivering notifications, and the first producer must not be baked into
+  the infrastructure's name. A future proposal to rename it `Reminders/`
+  "for consistency" would be un-making this decision.
+- `architecture/REMINDERS.md` (formerly NOTIFICATIONS.md) names its
+  subject: the reminder subsystem, which *uses* the notification
+  infrastructure. The old name labeled the doc after the transport.
+- `ScheduledToastReminderScheduler` is a correct name under the model — it
+  schedules toasts for reminders, each tier in position.
+- **No future documentation structure is reserved.** If a broader
+  notification subsystem is ever built, whether it warrants its own
+  architecture doc (or belongs inside another, or something else) is
+  decided then, from the architecture actually built — not pre-allocated
+  now. The architecture should earn its documents.
+
+The working test for which word a sentence needs: would it survive swapping
+the delivery mechanism? "The reminder fires at 9:50" — about intent →
+*reminder*. "It appears in the Notification Center even when Chronicle is
+closed" — about the message → *notification*. "The XML payload sets the
+delivery time" — about the mechanism → *toast*.

@@ -94,6 +94,13 @@ Core tables:
 - `EventOverrides` — foreign key to `Events`, unique
   `(SeriesEventId, OccurrenceAnchorUtc)`, per-field nullable columns.
   Null means "inherit from master at expansion time."
+- `Reminders` — foreign key to `Events`, `(OffsetQuantity, OffsetUnit)`
+  storing the user's expressed offset rather than a normalized minute
+  count, index on `EventId`. A composed child of the `Event` aggregate
+  (like `EventOverrides`), loaded as a side collection keyed by `EventId`,
+  never referenced from outside the aggregate. New table via `Schema.sql`
+  `CREATE TABLE IF NOT EXISTS` — no `ALTER TABLE` migration. Full contract
+  in `architecture/REMINDERS.md`.
 
 Repository return types are concrete collections (`List<T>` or
 arrays), never `IEnumerable<T>`. This prevents hidden re-enumeration
@@ -114,6 +121,9 @@ Indexes exist where range queries and identity lookups occur:
   `OccurrenceAnchorUtc`, plus a unique constraint on
   `(SeriesEventId, OccurrenceAnchorUtc)` enforcing one override per
   anchor per series.
+- `Reminders` has an index on `EventId` — the identity lookup behind the
+  reconciler's bulk fetch (`GetForEventsAsync`) and the editor's per-event
+  load.
 
 ## Cascade-Delete Semantics
 
@@ -132,9 +142,10 @@ everything in it"; reassignment was considered and rejected as adding
 a target-calendar picker and an awkward edge case when no other
 calendar exists.
 
-`EventOverride` rows cascade from event deletion via
-`OverrideRepository` cascade helpers invoked from
-`EventRepository.DeleteAsync` and `CalendarRepository.DeleteAsync`.
+`EventOverride` and `Reminder` rows cascade from event deletion via their
+repositories' cascade helpers, invoked from `EventRepository.DeleteAsync`
+and `CalendarRepository.DeleteAsync` — the same transactions, ahead of the
+`Events` delete so the foreign-key constraint is never tripped.
 
 ## Bulk-Write Rules
 

@@ -8,7 +8,7 @@ namespace Chronicle.Models;
 /// durations, so a fire time is plain arithmetic on a UTC instant. A month
 /// is not a fixed duration — "1 calendar month before" would be a
 /// different semantic concept (calendar-relative), not another value here.
-/// See NOTIFICATIONS.md "Offsets are fixed durations."
+/// See REMINDERS.md "Offsets are fixed durations."
 /// </summary>
 public enum ReminderOffsetUnit
 {
@@ -31,7 +31,7 @@ public enum ReminderOffsetUnit
 ///
 /// Pure domain: this type carries NO notification state (no toast id, no
 /// last-fired, no snooze). That state belongs to the notification
-/// pipeline, never to the reminder. See NOTIFICATIONS.md.
+/// pipeline, never to the reminder. See REMINDERS.md.
 /// </summary>
 public sealed class Reminder
 {

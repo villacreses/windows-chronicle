@@ -76,8 +76,7 @@ calendar to do — not a nice-to-have.
    recurrence instances.
 4. **Agenda view** — chronological upcoming-events list.
 5. **Year view** — at-a-glance year overview.
-6. **Notifications / reminders** — scheduled, reliable,
-   persistence-aware.
+6. **Reminders** — scheduled, reliable, persistence-aware.
 
 ### Status (2026-07-14)
 
@@ -89,12 +88,14 @@ revisit triggers in BACKLOG.md "Search backend upgrade"); Agenda is
 anchored today→end-of-next-month with Prev/Next disabled; Year is a
 4×3 density-tinted grid with tap-to-drill.
 
-**Phase C (Notifications) is IN PROGRESS on `feat/local-notifications`.**
-`architecture/NOTIFICATIONS.md` is the living design record — model,
-OS-scheduling rationale, activation-spike findings, reconciliation
-contract, per-unit status table. Read it first. The design in one
-line: `Reminder` is a child entity of the Event aggregate (stored as
-the user expressed it, `(OffsetQuantity, OffsetUnit)`), projected by
+**Phase C (Reminders) is IN PROGRESS on `feat/local-notifications`.**
+`architecture/REMINDERS.md` owns the subsystem contract — model,
+projection, reconciliation, activation, scope boundaries; rationale is
+in DECISIONS.md ("Reminders: OS-Scheduled Toasts, Reminder as a Child
+Entity" and "Reminder → Notification → Toast Vocabulary"). Read
+REMINDERS.md first. The design in one line: `Reminder` is a child
+entity of the Event aggregate (stored as the user expressed it,
+`(OffsetQuantity, OffsetUnit)`), projected by
 `EventProjection.ReminderSchedule` into `ReminderOccurrence[]`, which
 the sole-owner `ScheduledToastReminderScheduler` reconciles
 (clear-and-rebuild) into OS scheduled toasts that fire even when
@@ -117,18 +118,23 @@ Landed on the branch (units 0–4 + registry, suite at 250):
    MV-004 (delivery). The warm path needed two OS-only fixes — decode
    the activation argument off the UI thread (cross-thread COM), and an
    explicit `SetForegroundWindow` to raise the window — both in
-   `App.xaml.cs` and recorded in NOTIFICATIONS.md "Activation."
-2. **Unit 5 — cross-doc updates.** DECISIONS.md entry for the
-   Phase C rationale forks (OS-scheduled over app-scheduled; entity
-   over scalar — NOTIFICATIONS.md "Design history" has the content);
-   DATA_MODEL.md core-tables list gains `Reminders`.
-   AGENT_ONBOARDING.md is already done.
-3. **PR to main.** NOTE: `origin/feat/local-notifications` still
+   `App.xaml.cs` and recorded in REMINDERS.md "Activation."
+2. **Unit 5 — cross-doc updates (DONE).** DECISIONS.md gained the
+   Phase C rationale-fork entry ("Reminders: OS-Scheduled Toasts,
+   Reminder as a Child Entity" — OS-scheduled over app-scheduled; entity
+   over scalar) plus the "Reminder → Notification → Toast Vocabulary"
+   entry; NOTIFICATIONS.md was renamed to REMINDERS.md, restructured to
+   pure architecture (status/history/spike content removed), and points
+   to DECISIONS as the canonical rationale home. DATA_MODEL.md's
+   core-tables list gained `Reminders` (plus cascade and index notes);
+   BACKLOG.md gained the "Reminders" deferred-work section.
+   AGENT_ONBOARDING.md was already done.
+3. **PR to main (NEXT).** NOTE: `origin/feat/local-notifications` still
    points at the abandoned scalar-model commit `6d5d9a5` — push with
    `--force-with-lease`. The scalar work is preserved on local branch
    `backup/reminders-scalar-model`.
 
-Deferred beyond this branch (recorded in NOTIFICATIONS.md): Stage 2
+Deferred beyond this branch (recorded in BACKLOG.md "Reminders"):
 snooze/dismiss (`ReminderState` keyed on `(EventRef.Occurrence,
 ReminderId)`), multi-reminder editor UI, per-occurrence reminder
 overrides, default-reminder setting.
@@ -314,5 +320,5 @@ Before Google integration begins:
 - Search (Phase B) ✓
 - Agenda view (Phase B) ✓
 - Year view (Phase B) ✓
-- Notifications / reminders (Phase C) — in progress on
+- Reminders (Phase C) — in progress on
   `feat/local-notifications`; see "Status" above
