@@ -582,7 +582,8 @@ cascade-owned, never referenced externally, keyed by `EventId`. This keeps
 "first-class domain concept" from sprawling into an independent service
 layer. It carries **no** notification state (no toast id, no last-fired, no
 snooze) — that state belongs to the notification pipeline, and a future
-snooze/dismiss `ReminderState` (see `BACKLOG.md` "Reminders") will live
+snooze/dismiss `ReminderState` (see `BACKLOG.md` "Reminders — UX
+Parity") will live
 *outside* `Reminder` so the entity stays pure. The operational contract is
 in `architecture/REMINDERS.md` "Data model."
 
@@ -636,3 +637,156 @@ the delivery mechanism? "The reminder fires at 9:50" — about intent →
 *reminder*. "It appears in the Notification Center even when Chronicle is
 closed" — about the message → *notification*. "The XML payload sets the
 delivery time" — about the mechanism → *toast*.
+
+---
+
+## Reminders: Calendar Parity, Not Notification Platform (2026-07-18)
+
+Chronicle is a calendar application that has reminders — but reminders are
+not a minor checkbox, and they are not a platform ambition. The bar they
+are judged against:
+
+> Does Chronicle provide the reminder experience users would reasonably
+> expect from a modern Windows calendar app?
+
+Reminders should feel intuitive, reliable, and seamlessly part of the
+normal Windows notification experience — the baseline set by serious
+calendar applications and Windows-native apps, no more and no less.
+
+The division of ownership this rests on:
+
+- **Chronicle owns calendar reminders** — the domain entity, the
+  projection, what fires and when, and the experience of setting and
+  responding to them.
+- **Windows owns notification delivery** — toasts, the Notification
+  Center, Focus Assist, the user's system-level notification settings.
+- **Chronicle does not build a general notification ecosystem.** (See
+  "Reminder → Notification → Toast Vocabulary" and the non-goals below.)
+
+Consequence for the roadmap: the shipped engine (entity → projection →
+OS-owned scheduling → toast delivery → deep link) is the foundation, and
+the remaining reminder work is a **single coherent capability area —
+Reminder UX Parity** (scope in BACKLOG.md "Reminders," sequencing in
+EXECUTION_PLAN) — completing the expected experience, not a list of
+scattered deferrals and not platform work. Features are admitted to that
+area by the parity question above, and refused from it by the non-goals
+below.
+
+---
+
+## Reminders: Post-Ship Audit Positions (2026-07-18)
+
+A full surface-area design review followed the Phase C merge (PR #18),
+before any provider work. Its outcomes: two correctness items extend the
+Local Baseline (see EXECUTION_PLAN "Local Baseline Addendum"), a set of
+provider-era contracts is decided now so the adapter is designed against
+known policy, and a set of explicit non-goals is recorded so future
+contributors read them as positions, not gaps. Future capabilities form
+the Reminder UX Parity area in BACKLOG.md "Reminders — UX Parity" (see
+"Reminders:
+Calendar Parity, Not Notification Platform" above for the product
+direction that frames it).
+
+### Reminder offsets are bounded (maximum 4 weeks)
+
+The scheduling pipeline expands events over the horizon plus a **fixed**
+31-day pad. A reminder whose offset exceeds the pad, on an event starting
+beyond `horizon + pad`, would be silently missed — currently unreachable
+(the editor's largest preset is 2 weeks) but reachable the moment another
+writer can persist larger offsets.
+
+Two resolutions were weighed:
+
+- **Dynamic pad** — derive the pad from `MAX(offset)` in the data each
+  reconcile. Rejected: an extra query per reconcile, an unbounded
+  expansion range driven by a single outlier row, and complexity purchased
+  against a need nobody has demonstrated.
+- **Bounded domain** — cap the maximum supported offset at **4 weeks
+  (28 days)**, enforced at the write boundary (`Reminder.Validate`).
+  Chosen: it converts the fixed pad from a coincidence into an
+  invariant-backed constant (28 < 31 by construction), and it matches
+  Google's own maximum (40320 minutes = exactly 4 weeks), so provider
+  imports clamp along a boundary the ecosystem already recognizes.
+
+Consequence for adapters: inbound offsets beyond 4 weeks (e.g. exotic ICS
+alarms) are clamped, with a fidelity note. Enforcement is Local Baseline
+Addendum work; the REMINDERS.md contract is updated in the same change
+that implements it.
+
+### The editor must preserve reminders it cannot represent
+
+The domain is deliberately richer (0..N reminders, arbitrary expressed
+offsets) than the MVP editor (0..1, fixed presets). The audit found the
+gap is not merely unexpressed capability — it is a **destructive write
+path**: save replaces the event's whole reminder set from the 0..1 UI
+state, and a stored offset matching no preset displays as "No reminder."
+With the editor as sole writer this is unreachable; with any second writer
+(provider sync, import), every routine edit silently destroys data.
+
+Position: **a poorer UI over a richer model must never destroy state it
+cannot display.** Preservation — carrying through reminders the editor
+cannot represent, and never rendering a non-preset offset as "No
+reminder" — is a correctness invariant of the Local Baseline, independent
+of the multi-reminder editor (which remains future, purely additive UI
+work). This is the second audit item in the Local Baseline Addendum.
+
+### Provider-era reminder contracts (decided now, applied at adapter design)
+
+Recorded before any adapter exists so sync is designed against policy
+rather than discovering it per-bug. These are positions, not code; each is
+applied (and its operational half documented in the relevant subsystem
+doc) when the adapter work lands.
+
+- **Reminder identity across sync.** Providers carry no reminder identity
+  (Google and Outlook reminders are value objects). The adapter preserves
+  local `Reminder.Id` by matching `(EventId, offset)` across pulls rather
+  than rewriting rows — otherwise every sync mints new ids and will
+  silently invalidate future snooze/dismiss state keyed on them.
+- **Batch mutations reconcile once.** Bulk writers (sync pulls, imports)
+  invalidate through the post-mutation chokepoint **once per batch**, not
+  per row — the reconciler clear-and-rebuilds the whole OS group each
+  run, so per-row invalidation is O(rows × schedule). Sibling of "Bulk DB
+  Writes Use an Explicit Transaction," written down for the same reason.
+- **Outlook export is single-reminder.** Graph models exactly one
+  reminder per event; exporting an N-reminder event keeps the
+  **earliest-firing** one.
+- **Unit reconstruction.** Providers store flat minutes; on import the
+  adapter re-expresses them as the **largest exact unit** (20160 → 2
+  Weeks, not 14 Days). The preserve-the-user's-representation principle
+  binds local edits; provider round-trips are permitted to normalize the
+  expressed unit.
+- **Local reminders on provider events** are allowed (local-only
+  decoration on, e.g., a read-only subscribed calendar). The adapter
+  tracks provenance so write-back neither pushes local-only reminders nor
+  clobbers them on pull.
+- **Open, resolved at adapter design: representing "uses calendar
+  default."** Google events commonly carry `reminders.useDefault: true` —
+  reminders defined by a per-calendar setting, not the event. Chronicle
+  currently equates "no rows" with "no reminders" and cannot express the
+  difference. The two candidate shapes are materialize-at-import (simple;
+  drifts when the user later changes the default) and an explicit
+  uses-default flag (faithful; adds a tri-state to the reminder load
+  path). Decide when the Google adapter is designed — but decide it
+  *there*, deliberately, not as an import-code accident.
+
+### Non-goals (require new evidence to revisit)
+
+- **Generic notification framework** — until a second notification
+  producer actually exists (see "Reminder → Notification → Toast
+  Vocabulary").
+- **Calendar-relative offsets** ("1 month before") — reaffirmed; a month
+  is not a fixed duration, and this enters as its own concept if ever.
+- **Full VALARM fidelity** — absolute-time triggers, END-relative and
+  after-start offsets, REPEAT counts, non-display ACTIONs (email/audio).
+  Adapters normalize or drop with a fidelity note; the domain does not
+  chase ICS.
+- **OS-dismissal sync** — Windows does not expose Action Center dismissal
+  of scheduled toasts to a closed app; Chronicle-side dismiss (future
+  snooze/dismiss work) is the only dismiss.
+- **Import-time default-reminder stamping** — imported events keep their
+  source's reminder state; silence is respected.
+- **Surgical-diff reconciliation** — clear-and-rebuild stands until a
+  measured problem says otherwise.
+- **Multi-window activation routing** — no multi-window UI exists to
+  route for.
+- **Non-toast notification channels** (email, etc.) — toast only.

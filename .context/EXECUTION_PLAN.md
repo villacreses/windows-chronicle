@@ -106,7 +106,32 @@ BACKLOG.md "Reminders."
 Suite is at 250 tests; all four Reminders manual OS-integration
 verifications pass (`testing/MANUAL_VERIFICATION.md` MV-001–004).
 
-**Next up: Provider Integration Phase** — see below.
+**Next up: the Local Baseline Addendum below, then the Provider
+Integration Phase.**
+
+### Local Baseline Addendum — Reminder Correctness (2026-07-18)
+
+A post-ship surface-area review of the reminder subsystem (classified
+into blockers / provider prerequisites / the Reminder UX Parity area /
+non-goals — see DECISIONS.md "Reminders: Post-Ship Audit Positions" and
+BACKLOG.md "Reminders — UX Parity") found exactly **two** items that
+extend the Local Baseline. Both are internal-consistency fixes, not features, and
+they are the only items permitted to extend this milestone:
+
+1. **Editor preservation.** The 0..1-preset editor currently has a
+   destructive write path over the 0..N domain model: save replaces the
+   event's whole reminder set, and a non-preset offset displays as "No
+   reminder." Fix: preserve reminders the editor cannot represent, and
+   never render a non-preset offset as "No reminder." Not the
+   multi-reminder editor (BACKLOG) — preservation only.
+2. **Bounded offsets.** Enforce the decided maximum reminder offset
+   (4 weeks — see DECISIONS) at the write boundary, converting the
+   fixed 31-day scheduling pad from a coincidence into an
+   invariant-backed constant.
+
+Each lands with its tests (editor logic likely extracts to Core per the
+Layer-5 pattern; the pad gets a horizon-boundary test) and updates
+REMINDERS.md in the same change, per the drift rule.
 
 ## Recently Completed: Recurrence Phase 2B
 
@@ -250,8 +275,9 @@ Delivered:
 
 ## Next Milestones
 
-The Local Baseline milestone is complete; provider integration is now
-the active milestone.
+The Local Baseline is complete except the Addendum above, which is the
+active work. After it: provider integration, with Reminder UX Parity as
+a named capability area scheduled deliberately around it (see below).
 
 ### Provider Integration Phase
 
@@ -271,6 +297,41 @@ Open questions, to resolve as this phase starts:
 - Conflict resolution (Chronicle vs. Google last-write-wins, or
   user-facing diff).
 - Display of provider-sourced calendars in the sidebar.
+- Settings storage (this phase needs it for accounts/sync prefs
+  regardless; reminder settings in BACKLOG ride on it later).
+
+Reminder contracts the adapter is designed against — **decided, not
+open** (rationale in DECISIONS.md "Reminders: Post-Ship Audit
+Positions" → "Provider-era reminder contracts"):
+
+- Preserve `Reminder.Id` across pulls by `(EventId, offset)` matching.
+- Bulk writers reconcile the reminder schedule once per batch, not per
+  row.
+- Outlook export keeps the earliest-firing reminder (Graph models one).
+- Imported minutes re-express as the largest exact unit; provider
+  round-trips may normalize the expressed unit.
+- Local-only reminders on provider events are tracked by provenance;
+  write-back neither pushes nor clobbers them.
+- One deliberately open item, resolved at Google-adapter design time:
+  representing `reminders.useDefault` (materialize-at-import vs. an
+  explicit flag).
+
+### Reminder UX Parity
+
+A coherent capability area, not a grab-bag: the work that takes
+reminders from "engine complete" to the experience users expect from a
+modern Windows calendar app. Product direction and admission test:
+DECISIONS.md "Reminders: Calendar Parity, Not Notification Platform."
+Scope: BACKLOG.md "Reminders — UX Parity" (editor parity, notification
+parity — snooze/dismiss, trust parity).
+
+Sequencing: this area does **not** gate provider integration and is not
+a single monolithic phase — slices are scheduled deliberately. Two
+natural orderings to honor when slicing: default-reminder and all-day
+fire-time settings ride on the settings storage the provider phase
+introduces, and the multi-reminder editor builds on the Addendum's
+preservation work (which extracts the editor's reminder logic to a
+testable seam).
 
 ### Design Overhaul
 
@@ -291,5 +352,8 @@ Before Google integration begins:
 - Agenda view (Phase B) ✓
 - Year view (Phase B) ✓
 - Reminders (Phase C) ✓ — merged via PR #18; see "Status" above
+- Local Baseline Addendum — reminder correctness (editor preservation +
+  bounded offsets; see "Status" above) — **pending**
 
-**All items satisfied. Google integration is unblocked.**
+**All original items satisfied; the Addendum is the remaining gate
+before Google integration begins.**

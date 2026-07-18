@@ -245,7 +245,8 @@ identity is stable across unrelated edits even though the *row* is rewritten.
 **Open question:** whether an offset *change* should mutate the existing
 reminder in place (preserving `Id`) rather than mint a new one. This becomes
 load-bearing only when something external keys on reminder identity — the
-deferred snooze/dismiss `ReminderState` (BACKLOG.md "Reminders"). Until
+deferred snooze/dismiss `ReminderState` (BACKLOG.md "Reminders — UX
+Parity"). Until
 then, "changed offset = new identity" is correct and simplest: a snooze set
 against an old offset should not silently apply to a re-timed reminder
 anyway. Revisit when snooze/dismiss is built.
@@ -471,7 +472,8 @@ gap, not a theoretical one.
 ## Scope boundaries
 
 What the subsystem deliberately does not do. (The larger deferrals are
-tracked in `BACKLOG.md` "Reminders"; the scalar-vs-entity design rationale
+tracked in `BACKLOG.md` "Reminders — UX Parity"; the scalar-vs-entity
+design rationale
 is in DECISIONS.md "Reminders: OS-Scheduled Toasts, Reminder as a Child
 Entity.")
 

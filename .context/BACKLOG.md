@@ -13,24 +13,85 @@
 - Holiday calendars
 - Birthdays
 
-## Reminders
+## Reminders — UX Parity
 
-Deferred beyond the Local Baseline reminder MVP (subsystem contract in
-`architecture/REMINDERS.md`):
+A single coherent capability area, not scattered deferrals. Product
+direction: DECISIONS.md "Reminders: Calendar Parity, Not Notification
+Platform" — the admission test for this area is:
+
+> Does Chronicle provide the reminder experience users would reasonably
+> expect from a modern Windows calendar app?
+
+The engine (entity → projection → OS scheduling → toast → deep link) is
+shipped; this area completes the expected *experience* on top of it.
+Subsystem contract: `architecture/REMINDERS.md`. The two audit
+*correctness* items (editor preservation, bounded offsets) are not here —
+they extend the Local Baseline; see EXECUTION_PLAN.md "Local Baseline
+Addendum." Sequencing of this area is in EXECUTION_PLAN "Next Milestones."
+
+### Setting reminders (editor parity)
+
+- Multi-reminder editing — "Add reminder" collection rows. The domain,
+  persistence, and projection already handle N reminders per event; this
+  is editor work only. Validation policy (duplicate offsets, max count)
+  is decided with this feature.
+- Custom reminder offsets — arbitrary `(quantity, unit)` entry rather
+  than presets only.
+- All-day reminder fire time — today "1 day before" an all-day event
+  fires at local midnight (all-day events are midnight-bounded). The
+  model already represents "6 PM the day before" as `(30, Hours)`; this
+  is an editor-preset and default-setting question, not a schema one.
+- Default-reminder setting for new events — revisits the recorded
+  "silent unless the user opts in" position; needs settings storage
+  (which the provider phase introduces anyway).
+
+### Responding to reminders (notification parity)
 
 - Snooze / dismiss — a `ReminderState` table keyed on
-  `(EventRef.Occurrence, ReminderId)`, interactive toast buttons,
-  background activation. Likely its own branch. This state lives *outside*
-  the `Reminder` entity, which stays pure domain (no notification state).
-  Related open question recorded in REMINDERS.md "Reminder identity across
-  saves": whether an offset change should preserve reminder identity
-  becomes load-bearing once `ReminderState` keys on it.
-- Multi-reminder editor UI — "Add reminder" collection rows. The domain,
-  persistence, and projection already handle N reminders per event; this
-  is editor work only.
-- Per-occurrence reminder overrides.
-- Default-reminder setting for new events.
-- Non-toast notification channels.
+  `(EventRef.Occurrence, ReminderId)`, interactive toast buttons. Likely
+  its own branch. This state lives *outside* the `Reminder` entity, which
+  stays pure domain (no notification state). Design notes carried from
+  the audit: (a) snooze-without-opening-the-window requires background
+  activation, which requires the manifest COM activator the classic path
+  avoided — the alternative is foreground activation (window opens); the
+  spike's "no manifest change needed" finding covers fire-and-click only,
+  not this. (b) Offset edits mint new `ReminderId`s, so `ReminderState`
+  needs orphan cleanup for ids that no longer exist. (c) The desired set
+  becomes projection ⊖ dismissed ⊕ snooze-retimes — state joins at the
+  compute site; the scheduler contract is untouched.
+
+### Reliability the user can feel (trust parity)
+
+- Notification-disabled awareness — reminders are silently suppressed
+  when Windows notifications are off for Chronicle (`ToastNotifier
+  .Setting` is readable; surface a one-time notice).
+- Schedule staleness trigger — reconciliation runs only on launch and
+  data mutation; a session left open without edits ages its coverage
+  window toward the horizon edge (~2 mutation-free months before a miss;
+  REMINDERS.md "Horizon policy"). A date-gated check on window activation
+  (or a daily-coalesced equivalent) closes it within the Idle Cost
+  Budget's event-driven rules.
+- Reconcile diagnostics — failures are visible only in the debug log;
+  persist a minimal last-reconcile timestamp/count/result for a future
+  status surface.
+
+### Supporting robustness (nice-to-have)
+
+- Per-toast failure isolation in the scheduler (one bad `AddToSchedule`
+  currently abandons the remaining adds until the next reconcile).
+- Off-UI-thread reconcile — measure first; the scheduler's OS calls run
+  synchronously on the UI thread today and are cheap at realistic scale.
+- Manual-verification registry additions: reboot persistence of the OS
+  schedule; behavior with notifications disabled.
+
+### Wait for real user feedback
+
+- Per-occurrence reminder overrides (an occurrence inherits series
+  reminders; the occurrence editor deliberately omits the picker).
+- Series-reminder hint in the occurrence editor.
+- Deleted-event messaging on toast activation (currently: land on the
+  day, nothing opens).
+- Per-calendar reminder defaults; per-calendar notification mute.
 
 ## Integrations
 
