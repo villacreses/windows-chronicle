@@ -2,6 +2,7 @@ using Chronicle.Data.Repositories;
 using Chronicle.Helpers;
 using Chronicle.Models;
 using Chronicle.Models.Recurrence;
+using Chronicle.Notifications;
 using Chronicle.Projection;
 using Chronicle.Views.Dialogs;
 using Chronicle.Views.Popovers;
@@ -26,6 +27,14 @@ namespace Chronicle
         private readonly EventRepository _eventRepository = new();
         private readonly CalendarRepository _calendarRepository = new();
         private readonly OverrideRepository _overrideRepository = new();
+        private readonly ReminderRepository _reminderRepository = new();
+
+        // The sole owner of the OS scheduled-toast cache. Behind the seam so
+        // the notification subsystem owns its platform APIs in one place —
+        // not to hide Windows, but so toast concepts never leak back into the
+        // reminder model and no other code mutates scheduled toasts.
+        private readonly IReminderScheduler _reminderScheduler =
+            new ScheduledToastReminderScheduler();
 
         private readonly SidebarRenderer _sidebarRenderer;
         private readonly CalendarGridRenderer _calendarGridRenderer;
@@ -207,8 +216,7 @@ namespace Chronicle
                 _calendarVisibility.Remove(staleId);
 
             RenderSidebar();
-            InvalidateLoadedEvents();
-            await RefreshActiveViewAsync();
+            await AfterDataMutationAsync();
         }
 
         // ── Full refresh (single re-render entry point) ───────────────────────
@@ -361,6 +369,19 @@ namespace Chronicle
                 return;
             }
 
+            ApplyViewMode(view);
+            await RefreshActiveViewAsync();
+        }
+
+        /// <summary>
+        /// Sets the active view mode synchronously — state, toggle buttons,
+        /// and root visibilities — without triggering a refresh. Callers that
+        /// need to await the subsequent load (e.g. the reminder deep-link)
+        /// call this then <see cref="RefreshActiveViewAsync"/> directly, since
+        /// <see cref="SwitchView"/> is fire-and-forget (async void).
+        /// </summary>
+        private void ApplyViewMode(CalendarView view)
+        {
             _currentView = view;
             UpdateViewToggles();
 
@@ -374,8 +395,6 @@ namespace Chronicle
                 view == CalendarView.Agenda ? Visibility.Visible : Visibility.Collapsed;
             YearViewRoot.Visibility =
                 view == CalendarView.Year ? Visibility.Visible : Visibility.Collapsed;
-
-            await RefreshActiveViewAsync();
         }
 
         private void UpdateViewToggles()
@@ -648,7 +667,7 @@ namespace Chronicle
             var naturalAnchor = await FindChipForEventAsync(EventKey.For(draft)) ?? ActiveViewRoot;
             var (anchor, placement) = ResolvePopoverAnchor(naturalAnchor);
 
-            Event? created;
+            EventEditResult? created;
             try
             {
                 created = await EventEditPopover.ShowCreateEventAsync(
@@ -661,9 +680,14 @@ namespace Chronicle
 
             if (created is not null)
             {
-                await _eventRepository.InsertAsync(created);
-                InvalidateLoadedEvents();
-                await RefreshActiveViewAsync();
+                await _eventRepository.InsertAsync(created.Event);
+                // Reminders are a child collection of the event aggregate;
+                // persisted separately after the event row exists (FK). The
+                // scheduler reconciles off this state in unit 3 — nothing
+                // schedules a toast here.
+                await _reminderRepository.SetForEventAsync(
+                    created.Event.Id, created.Reminders);
+                await AfterDataMutationAsync();
             }
             else
             {
@@ -842,14 +866,20 @@ namespace Chronicle
             FrameworkElement anchor,
             FlyoutPlacementMode placement)
         {
+            // Reminders are a side collection — load them to seed the picker,
+            // since the Event does not carry them.
+            var existingReminders = await _reminderRepository.GetForEventAsync(master.Id);
+
             var edited = await EventEditPopover.ShowEditEventAsync(
-                anchor, master, _allCalendars, placement);
+                anchor, master, existingReminders, _allCalendars, placement);
             if (edited is null)
                 return;
 
-            await _eventRepository.UpdateAsync(edited);
-            InvalidateLoadedEvents();
-            await RefreshActiveViewAsync();
+            await _eventRepository.UpdateAsync(edited.Event);
+            // Replace the event's whole reminder set (0..1 from the editor).
+            await _reminderRepository.SetForEventAsync(
+                edited.Event.Id, edited.Reminders);
+            await AfterDataMutationAsync();
         }
 
         /// <summary>
@@ -866,8 +896,7 @@ namespace Chronicle
             var master = await _eventRepository.GetByIdAsync(masterId);
             if (master is null)
             {
-                InvalidateLoadedEvents();
-                await RefreshActiveViewAsync();
+                await AfterDataMutationAsync();
                 return;
             }
 
@@ -903,8 +932,7 @@ namespace Chronicle
                 IsAllDay: edited.IsAllDay);
 
             await _overrideRepository.UpsertAsync(target, fields);
-            InvalidateLoadedEvents();
-            await RefreshActiveViewAsync();
+            await AfterDataMutationAsync();
         }
 
         // ── Event loading ─────────────────────────────────────────────────────
@@ -997,6 +1025,172 @@ namespace Chronicle
         {
             _loadedRangeStartUtc = DateTime.MaxValue;
             _loadedRangeEndUtc = DateTime.MinValue;
+        }
+
+        /// <summary>
+        /// The single "persisted calendar data changed" chokepoint. Every
+        /// event-mutation path (create, edit-master, edit-occurrence, delete,
+        /// skip-occurrence) routes through here, and the calendar-mutation
+        /// path funnels into it via <see cref="ReloadCalendarsAndRefreshAsync"/>.
+        /// Consolidating the post-mutation behavior in one place keeps the
+        /// invalidate-then-refresh pair from drifting across handlers, and
+        /// gives later cross-cutting concerns (e.g. reminder-schedule
+        /// reconciliation) a single hook rather than N scattered call sites.
+        ///
+        /// Pure navigation (view switch, date selection) deliberately does
+        /// NOT come through here — it calls <see cref="RefreshActiveViewAsync"/>
+        /// without invalidating, because the data hasn't changed.
+        /// </summary>
+        private async Task AfterDataMutationAsync()
+        {
+            InvalidateLoadedEvents();
+            await RefreshActiveViewAsync();
+
+            // Reminder scheduling is ONE downstream consumer of this generic
+            // lifecycle event — not the reason the chokepoint exists. Run it
+            // after the view refresh so a slow or failing schedule never
+            // delays the visible update. Other future consumers (provider-sync
+            // bookkeeping, search indexing) would hang off the same event.
+            await ReconcileRemindersAsync();
+        }
+
+        // ── Reminder activation (deep-link from a clicked toast) ──────────────
+
+        /// <summary>
+        /// Translates a clicked reminder toast into the existing navigation
+        /// model: go to the event's day and open it. Deliberately thin — it
+        /// knows nothing of scheduling, reminders, or recurrence expansion.
+        /// The target date comes straight from the <see cref="EventRef"/>
+        /// (an occurrence's rule-walk anchor, or a loaded master's start), and
+        /// the event to open is found by identity against the projection the
+        /// normal load pipeline already expanded — activation never expands
+        /// anything itself.
+        ///
+        /// Best-effort by design: if the event was deleted since the toast was
+        /// scheduled, the user simply lands on the day with nothing to open.
+        /// </summary>
+        public async Task DeepLinkToReminderAsync(EventRef reminderRef)
+        {
+            DateTime targetDate;
+            Guid eventId;
+            DateTime? anchorUtc = null;
+
+            switch (reminderRef)
+            {
+                case EventRef.Occurrence occ:
+                    eventId = occ.SeriesId;
+                    anchorUtc = occ.AnchorUtc;
+                    targetDate = DateHelpers.GetEventDayKey(occ.AnchorUtc);
+                    break;
+
+                case EventRef.Master master:
+                    var evt = await _eventRepository.GetByIdAsync(master.Id);
+                    if (evt is null)
+                        return; // deleted since scheduling — nothing to navigate to.
+                    eventId = master.Id;
+                    targetDate = DateHelpers.GetEventDayKey(evt.StartTimeUtc);
+                    break;
+
+                default:
+                    return;
+            }
+
+            // Navigate with the existing model, awaiting the load so the day's
+            // events are in the projection before we look for the target.
+            _selectedDate = targetDate;
+            _displayMonth = DateHelpers.GetMonthStartLocal(targetDate);
+            ApplyViewMode(CalendarView.Day);
+            await RefreshActiveViewAsync();
+
+            // Identity match against the already-expanded projection — an
+            // occurrence matches on (Id + anchor), a master/standalone on Id
+            // with no anchor.
+            var dayEvents = _eventsByDate.GetValueOrDefault(targetDate) ?? new List<Event>();
+            var match = dayEvents.FirstOrDefault(e =>
+                e.Id == eventId
+                && (anchorUtc is null ? !e.IsOccurrence : e.SeriesAnchorUtc == anchorUtc));
+
+            if (match is null)
+                return;
+
+            var anchor = await FindChipForEventAsync(EventKey.For(match)) ?? FallbackAnchor;
+            OnEventClicked(match, anchor);
+        }
+
+        // ── Reminder schedule reconciliation ──────────────────────────────────
+
+        // Horizon policy (REMINDERS.md): schedule reminders whose fire time
+        // falls within this window from now. A tunable policy, not an invariant.
+        private static readonly TimeSpan ReminderHorizon = TimeSpan.FromDays(60);
+
+        // Expansion pad: an event can start past the horizon yet have a reminder
+        // firing inside it (a large lead). Expand comfortably beyond the
+        // editor's largest preset (2 weeks) so no in-window reminder is missed.
+        private static readonly TimeSpan ReminderHorizonPad = TimeSpan.FromDays(31);
+
+        /// <summary>
+        /// Recomputes the desired reminder schedule from persisted state and
+        /// hands it to the scheduler, which reconciles the OS toast cache to
+        /// match. This is the single place the reminder projection is computed
+        /// and handed to the notification boundary; the scheduler is the single
+        /// place the OS cache is mutated.
+        ///
+        /// Runs its own load over the HORIZON range — independent of the active
+        /// view's loaded range, since reminders need ~60 days ahead, not the
+        /// current month. Reuses the same projection pipeline as the views and
+        /// search (<see cref="EventRepository.GetInRangeAsync"/> →
+        /// <see cref="EventProjection.ExpandRecurrences"/> →
+        /// <see cref="EventProjection.ReminderSchedule"/>); it duplicates no
+        /// projection logic.
+        ///
+        /// Failure contract (REMINDERS.md): a scheduling failure must never
+        /// abort the mutation that triggered it. Failures are caught and logged;
+        /// the app stays usable and the next reconcile repairs the schedule. If
+        /// Chronicle grows a diagnostics/sync-status surface, reminder failures
+        /// would feed into it here.
+        /// </summary>
+        private async Task ReconcileRemindersAsync()
+        {
+            try
+            {
+                var nowUtc = DateTime.UtcNow;
+                var windowStartUtc = nowUtc;
+                var windowEndUtc = nowUtc + ReminderHorizon;
+                var expandEndUtc = windowEndUtc + ReminderHorizonPad;
+
+                // Own load over the horizon (not _eventsByDate — that is the
+                // active view's range).
+                var rows = await _eventRepository.GetInRangeAsync(
+                    windowStartUtc, expandEndUtc);
+
+                var recurringMasterIds = rows
+                    .Where(e => e.RecurrenceRule is not null)
+                    .Select(e => e.Id)
+                    .ToList();
+                var overrides = recurringMasterIds.Count == 0
+                    ? new List<EventOverride>()
+                    : await _overrideRepository.GetForSeriesAsync(recurringMasterIds);
+                var overridesBySeries = EventProjection.GroupOverridesBySeries(overrides);
+
+                var expanded = EventProjection.ExpandRecurrences(
+                    rows, windowStartUtc, expandEndUtc, overridesBySeries);
+
+                var eventIds = expanded.Select(e => e.Id).Distinct().ToList();
+                var reminders = await _reminderRepository.GetForEventsAsync(eventIds);
+                var remindersByEvent = EventProjection.GroupRemindersByEvent(reminders);
+
+                var schedule = EventProjection.ReminderSchedule(
+                    expanded, remindersByEvent, windowStartUtc, windowEndUtc);
+
+                await _reminderScheduler.ReconcileAsync(schedule);
+            }
+            catch (Exception ex)
+            {
+                // Non-fatal: reminders may be stale until the next reconcile.
+                System.Diagnostics.Debug.WriteLine(
+                    "Reminder reconcile failed (reminders may be out of sync "
+                    + $"until the next reconcile): {ex.Message}\n{ex.StackTrace}");
+            }
         }
 
         // ── Search ────────────────────────────────────────────────────────────
@@ -1209,8 +1403,7 @@ namespace Chronicle
                 else
                     await _eventRepository.DeleteAsync(evt.Id);
 
-                InvalidateLoadedEvents();
-                await RefreshActiveViewAsync();
+                await AfterDataMutationAsync();
             }
             catch (Exception ex)
             {

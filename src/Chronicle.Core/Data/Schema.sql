@@ -68,3 +68,23 @@ ON EventOverrides(SeriesEventId);
 
 CREATE INDEX IF NOT EXISTS IX_EventOverrides_OccurrenceAnchorUtc
 ON EventOverrides(OccurrenceAnchorUtc);
+
+-- Reminders are composed children of the Event aggregate (like
+-- EventOverrides): cascade-deleted with their event via the repository
+-- transactions, never referenced from outside the aggregate. The offset
+-- is stored as the user expressed it — (Quantity, Unit), never a
+-- normalized minute count. Units are fixed durations only
+-- ('Minutes' | 'Hours' | 'Days' | 'Weeks'); see REMINDERS.md.
+CREATE TABLE IF NOT EXISTS Reminders (
+    Id TEXT PRIMARY KEY,
+
+    EventId TEXT NOT NULL,
+
+    OffsetQuantity INTEGER NOT NULL,
+    OffsetUnit TEXT NOT NULL,
+
+    FOREIGN KEY (EventId) REFERENCES Events(Id)
+);
+
+CREATE INDEX IF NOT EXISTS IX_Reminders_EventId
+ON Reminders(EventId);

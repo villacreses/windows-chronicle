@@ -47,6 +47,18 @@ internal static class RepositoryTestData
         };
     }
 
+    public static Reminder NewReminder(
+        Guid eventId,
+        int quantity = 10,
+        ReminderOffsetUnit unit = ReminderOffsetUnit.Minutes)
+        => new Reminder
+        {
+            Id = Guid.NewGuid(),
+            EventId = eventId,
+            OffsetQuantity = quantity,
+            OffsetUnit = unit,
+        };
+
     public static Event RecurringMaster(
         Guid calendarId,
         string rrule = "FREQ=WEEKLY",

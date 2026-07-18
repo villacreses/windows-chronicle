@@ -13,6 +13,9 @@
     <EnableMsixTooling>true</EnableMsixTooling>
     <DisableXamlGeneratedCodeBehind>False</DisableXamlGeneratedCodeBehind>
     <DisableProgramGeneration>True</DisableProgramGeneration>
+    <!-- Suppress the XAML-generated Program.Main so our custom entry point
+         (Program.cs) can single-instance for reminder-toast activation. -->
+    <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>

@@ -30,6 +30,21 @@ public sealed class AppDatabaseTests : DatabaseTest
         Assert.True(TableExists("Calendars"));
         Assert.True(TableExists("Events"));
         Assert.True(TableExists("EventOverrides"));
+        Assert.True(TableExists("Reminders"));
+    }
+
+    [Fact]
+    public void Initialize_OnLegacyDatabase_CreatesRemindersTable()
+    {
+        // Reminders is a new table (CREATE TABLE IF NOT EXISTS in
+        // Schema.sql), so unlike the recurrence columns it needs no
+        // guarded ALTER migration — a legacy database picks it up from
+        // the schema pass alone.
+        CreateLegacyEventsSchema();
+
+        InitializeDatabase();
+
+        Assert.True(TableExists("Reminders"));
     }
 
     [Fact]
