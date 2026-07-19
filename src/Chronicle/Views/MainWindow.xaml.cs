@@ -1124,8 +1124,11 @@ namespace Chronicle
         private static readonly TimeSpan ReminderHorizon = TimeSpan.FromDays(60);
 
         // Expansion pad: an event can start past the horizon yet have a reminder
-        // firing inside it (a large lead). Expand comfortably beyond the
-        // editor's largest preset (2 weeks) so no in-window reminder is missed.
+        // firing inside it (a large lead). Fixed at 31 days — deliberately
+        // beyond Reminder.MaxOffsetMinutes (4 weeks = 40320 minutes), the
+        // domain-enforced maximum reminder offset (see DECISIONS.md
+        // "Reminders: Post-Ship Audit Positions"), so no writer can ever
+        // persist an offset this pad would miss.
         private static readonly TimeSpan ReminderHorizonPad = TimeSpan.FromDays(31);
 
         /// <summary>

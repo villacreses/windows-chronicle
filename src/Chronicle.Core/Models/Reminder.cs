@@ -53,6 +53,18 @@ public sealed class Reminder
     /// </summary>
     public int OffsetMinutes => OffsetQuantity * MinutesPer(OffsetUnit);
 
+    /// <summary>
+    /// The maximum supported reminder offset: 4 weeks (40320 minutes). Kept
+    /// deliberately under the reconciler's fixed 31-day expansion pad
+    /// (<c>MainWindow.ReminderHorizonPad</c>) so that pad can never miss a
+    /// reminder any writer is allowed to persist — the invariant that
+    /// closes REMINDERS.md "Horizon and padding". Matches Google Calendar's
+    /// own maximum (40320 minutes), so provider imports clamp along a
+    /// boundary the ecosystem already recognizes. See DECISIONS.md
+    /// "Reminders: Post-Ship Audit Positions".
+    /// </summary>
+    public const int MaxOffsetMinutes = 4 * 7 * 24 * 60;
+
     private static int MinutesPer(ReminderOffsetUnit unit) => unit switch
     {
         ReminderOffsetUnit.Minutes => 1,
@@ -69,6 +81,13 @@ public sealed class Reminder
         {
             throw new InvalidOperationException(
                 "Reminder offset quantity cannot be negative.");
+        }
+
+        if (OffsetMinutes > MaxOffsetMinutes)
+        {
+            throw new InvalidOperationException(
+                $"Reminder offset cannot exceed {MaxOffsetMinutes} minutes "
+                + "(4 weeks). See REMINDERS.md \"Horizon and padding\".");
         }
     }
 }

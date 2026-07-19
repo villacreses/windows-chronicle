@@ -708,10 +708,14 @@ Two resolutions were weighed:
   Google's own maximum (40320 minutes = exactly 4 weeks), so provider
   imports clamp along a boundary the ecosystem already recognizes.
 
-Consequence for adapters: inbound offsets beyond 4 weeks (e.g. exotic ICS
-alarms) are clamped, with a fidelity note. Enforcement is Local Baseline
-Addendum work; the REMINDERS.md contract is updated in the same change
-that implements it.
+**Enforced.** `Reminder.Validate` rejects any offset whose derived
+`OffsetMinutes` exceeds `Reminder.MaxOffsetMinutes` (40320), at the single
+write chokepoint (`ReminderRepository.SetForEventAsync` calls `Validate`
+per reminder) — so no writer, present or future, can persist an offset the
+fixed pad would miss. No migration was needed: the editor could only ever
+produce presets up to 2 weeks, so no existing data could violate the new
+bound. Consequence for adapters: inbound offsets beyond 4 weeks (e.g.
+exotic ICS alarms) are clamped, with a fidelity note.
 
 ### The editor must preserve reminders it cannot represent
 
@@ -728,7 +732,17 @@ cannot display.** Preservation — carrying through reminders the editor
 cannot represent, and never rendering a non-preset offset as "No
 reminder" — is a correctness invariant of the Local Baseline, independent
 of the multi-reminder editor (which remains future, purely additive UI
-work). This is the second audit item in the Local Baseline Addendum.
+work; BACKLOG.md "Reminders — UX Parity").
+
+**Implemented.** The preset table, seeding, and the preserve-vs-replace
+save decision were extracted from `EventEditPopover` into
+`Chronicle.Models.ReminderPickerModel` — a pure, unit-tested seam (see
+`.context/TESTING.md` Layer 5) rather than logic embedded in the WinUI
+popover. An unrepresentable existing set (more than one reminder, or an
+offset matching no preset) surfaces a synthetic "Custom (kept as-is)"
+entry; saving with it untouched preserves the set verbatim, while
+selecting any other entry is an explicit user choice and replaces the
+whole set — narrowing by deliberate action, not silent loss.
 
 ### Provider-era reminder contracts (decided now, applied at adapter design)
 

@@ -65,9 +65,11 @@ Cheapest, most stable contracts: the calendar's basic language.
 
 Covers `RecurrenceRule` (RRULE parse / canonical round-trip / part
 validation), `RecurrenceExpander` basic expansion, `EventKey`, `EventRef`,
-`Event.Validate`, `EventOverride.Validate`, `Reminder.Validate` (plus the
-`OffsetMinutes` derivation), and `DateHelpers` (grid/week/day geometry and
-the local↔UTC conversions).
+`Event.Validate`, `EventOverride.Validate`, `Reminder.Validate` (the
+negative-quantity rejection, the `OffsetMinutes` derivation, and the
+bounded-offset invariant — `Reminder.MaxOffsetMinutes`, 4 weeks, enforced
+regardless of which unit expresses it), and `DateHelpers` (grid/week/day
+geometry and the local↔UTC conversions).
 
 Enforces: RRULE round-trips to canonical form; unsupported RRULE parts fail
 loudly; `COUNT` and `UNTIL` are mutually exclusive; `BYDAY` is weekly-only,
@@ -168,9 +170,13 @@ orders a day all-day-first, then by start instant, ties broken by title;
 `SearchOccurrences` expands matching recurring masters and re-filters merged
 occurrences against the query; `ReminderSchedule` emits the occurrence ×
 reminder product (multi-reminder events yield one intent per reminder),
-derives fire times from each occurrence's own start, filters to the window,
-and orders deterministically (fire time, title, reminder id), with
-`GroupRemindersByEvent` bucketing a flat reminder list by `EventId`;
+derives fire times from each occurrence's own start, filters to the window
+(inclusive at both bounds, pinned at the exact boundary for an event at
+`Reminder.MaxOffsetMinutes`'s worst-case distance past the window — the
+test that ties the domain's offset bound to the reconciler's fixed
+expansion pad), and orders deterministically (fire time, title, reminder
+id), with `GroupRemindersByEvent` bucketing a flat reminder list by
+`EventId`;
 `ReminderActivationPayload` round-trips master and occurrence identities
 (sub-second anchor precision preserved) and decodes anything malformed to
 null. The integration test proves the links compose: persisted EXDATE and
@@ -184,8 +190,9 @@ Pure logic that once lived next to WinUI, now in Core so its decisions are
 testable without a UI. The suite tests the decisions, not the pixels.
 
 Covers `TimelinePacker` (overlap-packing geometry), `RecurrencePickerModel`
-(recurrence rule ⇄ picker state), and `RecurrenceTimeZone` (write-boundary
-zone normalization).
+(recurrence rule ⇄ picker state), `RecurrenceTimeZone` (write-boundary zone
+normalization), and `ReminderPickerModel` (the "Remind me" picker's preset
+table, seeding, and preserve-vs-replace save resolution).
 
 Enforces: non-overlapping and boundary-touching events pack full-width;
 overlapping events split into equal side-by-side columns and a freed column is
@@ -197,11 +204,19 @@ integer, the end date is on/after start, `UNTIL` is the inclusive end of the
 chosen day), `SeedState` maps a rule back to picker state, and the two
 round-trip within the picker's representable subset; `NormalizeToIana` converts
 a Windows zone id to IANA, passes an IANA id through, and degrades an
-unmappable id to UTC (never persisting an unmapped string).
+unmappable id to UTC (never persisting an unmapped string);
+`ReminderPickerModel.IsRepresentable` distinguishes the 0..1-preset shape
+the editor can show from sets it cannot (more than one reminder, or an
+offset matching no preset), `BuildLabels`/`SeedIndex` surface a synthetic
+"kept as-is" entry for the latter, and `ResolveForSave` is the correctness
+pin: the sentinel left untouched preserves the existing set verbatim
+(same Ids), while selecting any other entry replaces the whole set —
+the Local Baseline Addendum's fix for a poorer UI destroying a richer
+model's state (DECISIONS.md "Reminders: Post-Ship Audit Positions").
 
 ## Seams
 
-Four seams make the domain reachable without dragging WinUI or a live
+Five seams make the domain reachable without dragging WinUI or a live
 filesystem into the test host. Each is `internal` in `Chronicle.Core`; the
 WinUI host calls into it and owns nothing the seam owns.
 
@@ -226,6 +241,10 @@ WinUI host calls into it and owns nothing the seam owns.
   `RecurrenceTimeZone`) — the picker seam: rule construction, seed mapping, and
   validation over a plain `RecurrencePickerState`. `EventEditPopover` keeps
   only the WinUI control wiring.
+- **`Chronicle.Models.ReminderPickerModel`** — the "Remind me" picker seam:
+  the preset table, representability, seeding, and the preserve-vs-replace
+  save resolution over a plain reminder list and a selected index.
+  `EventEditPopover` keeps only the WinUI `ComboBox` wiring.
 
 ## Boundaries
 

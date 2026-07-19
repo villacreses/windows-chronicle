@@ -672,4 +672,31 @@ public sealed class EventProjectionTests
 
         Assert.Equal(new[] { "Earlier", "Later" }, result.Select(r => r.Title));
     }
+
+    [Fact]
+    public void ReminderSchedule_CapturesMaxOffsetReminder_AtWindowEndBoundary()
+    {
+        // The domain caps reminder offsets at Reminder.MaxOffsetMinutes (4
+        // weeks) specifically so MainWindow's fixed 31-day expansion pad
+        // (ReminderHorizonPad) always comfortably exceeds the longest
+        // offset Chronicle allows — see DECISIONS.md "Reminders: Post-Ship
+        // Audit Positions" and REMINDERS.md "Horizon and padding". Worst
+        // case: an event starting as late as possible while its
+        // max-offset reminder still fires exactly at the window's upper
+        // edge (inclusive).
+        var calendarId = NewCalendar().Id;
+        var windowStart = Utc(2026, 7, 1);
+        var windowEnd = Utc(2026, 7, 31);
+        var eventStart = windowEnd.AddMinutes(Reminder.MaxOffsetMinutes);
+
+        var evt = StandaloneEvent(calendarId, startUtc: eventStart, title: "Renewal");
+        var reminder = ReminderFor(evt.Id, 4, ReminderOffsetUnit.Weeks);
+        var reminders = EventProjection.GroupRemindersByEvent(new List<Reminder> { reminder });
+
+        var result = EventProjection.ReminderSchedule(
+            new[] { evt }, reminders, windowStart, windowEnd);
+
+        var only = Assert.Single(result);
+        Assert.Equal(windowEnd, only.FireTimeUtc);
+    }
 }

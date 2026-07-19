@@ -47,4 +47,41 @@ public class ReminderValidationTests
     {
         Assert.Equal(expectedMinutes, Valid(quantity, unit).OffsetMinutes);
     }
+
+    // ── Bounded offset (Local Baseline Addendum) ──────────────────────────
+    //
+    // Maximum 4 weeks, enforced at the single write chokepoint
+    // (ReminderRepository.SetForEventAsync calls Validate per reminder).
+    // See DECISIONS.md "Reminders: Post-Ship Audit Positions" — the bound
+    // is chosen specifically to stay under MainWindow's fixed 31-day
+    // ReminderHorizonPad (see REMINDERS.md "Horizon and padding").
+
+    [Fact]
+    public void Validate_ExactlyFourWeeks_DoesNotThrow()
+    {
+        Valid(quantity: 4, unit: ReminderOffsetUnit.Weeks).Validate();
+    }
+
+    [Fact]
+    public void Validate_OverFourWeeksInWeeks_Throws()
+    {
+        var reminder = Valid(quantity: 5, unit: ReminderOffsetUnit.Weeks);
+        Assert.Throws<InvalidOperationException>(() => reminder.Validate());
+    }
+
+    [Fact]
+    public void Validate_OverFourWeeksInMinutes_Throws()
+    {
+        // Same bound regardless of which unit expresses it — the invariant
+        // is on total duration (OffsetMinutes), not on the unit chosen.
+        var reminder = Valid(
+            quantity: Reminder.MaxOffsetMinutes + 1, unit: ReminderOffsetUnit.Minutes);
+        Assert.Throws<InvalidOperationException>(() => reminder.Validate());
+    }
+
+    [Fact]
+    public void MaxOffsetMinutes_IsExactlyFourWeeks()
+    {
+        Assert.Equal(4 * 7 * 24 * 60, Reminder.MaxOffsetMinutes);
+    }
 }

@@ -70,88 +70,12 @@ public static class EventEditPopover
     private static string GetDefaultRecurringTimeZoneId()
         => RecurrenceTimeZone.NormalizeToIana(TimeZoneInfo.Local.Id);
 
-    // "Remind me" presets, stored as the user's expressed offset (quantity +
-    // unit), never normalized to minutes — see REMINDERS.md. Quantity
-    // null = "No reminder". The editor exposes one reminder; the domain and
-    // the write path support a set of any size. Shown only on the master /
-    // standalone path — per-occurrence reminder overrides are deferred, so an
-    // occurrence inherits the series reminders.
-    private static readonly (string Label, int? Quantity, ReminderOffsetUnit Unit)[] ReminderOptions =
-    {
-        ("No reminder",       null, ReminderOffsetUnit.Minutes),
-        ("At start time",     0,    ReminderOffsetUnit.Minutes),
-        ("10 minutes before", 10,   ReminderOffsetUnit.Minutes),
-        ("30 minutes before", 30,   ReminderOffsetUnit.Minutes),
-        ("1 hour before",     1,    ReminderOffsetUnit.Hours),
-        ("1 day before",      1,    ReminderOffsetUnit.Days),
-        ("1 week before",     1,    ReminderOffsetUnit.Weeks),
-        ("2 weeks before",    2,    ReminderOffsetUnit.Weeks),
-    };
-
-    private static ComboBox BuildReminderPicker(int? initialQuantity, ReminderOffsetUnit initialUnit)
-    {
-        var combo = new ComboBox
-        {
-            HorizontalAlignment = HorizontalAlignment.Stretch,
-            ItemsSource = ReminderOptions.Select(o => o.Label).ToArray()
-        };
-        // The editor is the sole writer and only emits these presets, so a
-        // stored reminder matches one; fall back to "No reminder" otherwise.
-        // When quantity is null the unit is irrelevant (the None option).
-        var index = Array.FindIndex(ReminderOptions,
-            o => o.Quantity == initialQuantity
-                 && (initialQuantity is null || o.Unit == initialUnit));
-        combo.SelectedIndex = index >= 0 ? index : 0;
-        return combo;
-    }
-
-    // Reads the picker into the reminder set for the built event: an empty
-    // list for "No reminder", otherwise a single reminder carrying the
-    // event's id and the chosen (quantity, unit).
-    //
-    // Identity rule: if the chosen offset equals the event's existing
-    // reminder offset, the existing reminder's Id is preserved — a
-    // title-only edit must not mint a new reminder entity. A changed
-    // offset mints a new identity (a changed offset is a new intent).
-    // The mutate-vs-replace question for offset edits becomes load-bearing
-    // only when something external keys on reminder identity (Stage 2's
-    // ReminderState) — see REMINDERS.md "Reminder identity across
-    // saves."
-    private static List<Reminder> ReadReminderSet(
-        ComboBox combo,
-        Guid eventId,
-        int? initialQuantity,
-        ReminderOffsetUnit initialUnit,
-        Guid? initialReminderId)
-    {
-        var option = ReminderOptions[combo.SelectedIndex];
-        if (option.Quantity is not int quantity)
-            return new List<Reminder>();
-
-        var offsetUnchanged =
-            initialReminderId is not null
-            && initialQuantity == quantity
-            && initialUnit == option.Unit;
-
-        return new List<Reminder>
-        {
-            new Reminder
-            {
-                Id = offsetUnchanged ? initialReminderId!.Value : Guid.NewGuid(),
-                EventId = eventId,
-                OffsetQuantity = quantity,
-                OffsetUnit = option.Unit,
-            }
-        };
-    }
-
-    // The (quantity, unit, id) to seed the picker from an event's existing
-    // reminder set (0..1 in the editor; takes the first if more exist).
-    private static (int? Quantity, ReminderOffsetUnit Unit, Guid? Id) InitialReminderOffset(
-        IReadOnlyList<Reminder> existing)
-        => existing.Count > 0
-            ? (existing[0].OffsetQuantity, existing[0].OffsetUnit, existing[0].Id)
-            : (null, ReminderOffsetUnit.Minutes, null);
+    // "Remind me" picker: presets, seeding from an existing reminder set, and
+    // resolving a selection back into the set to persist all live in the
+    // pure Chronicle.Models.ReminderPickerModel (see .context/TESTING.md
+    // Layer 5). This popover only wires the WinUI ComboBox to it. Shown only
+    // on the master / standalone path — per-occurrence reminder overrides
+    // are deferred, so an occurrence inherits the series reminders.
 
     /// <summary>
     /// Shows the create-event popover anchored to <paramref name="anchorElement"/>.
@@ -175,9 +99,7 @@ public static class EventEditPopover
             initialEndLocal: suggestedStartTime.AddHours(1),
             initialIsAllDay: false,
             initialDescription: null,
-            initialReminderQuantity: null,
-            initialReminderUnit: ReminderOffsetUnit.Minutes,
-            initialReminderId: null,
+            existingReminders: Array.Empty<Reminder>(),
             calendars: availableCalendars,
             selectedCalendarId: availableCalendars.Count > 0 ? availableCalendars[0].Id : null,
             initialRecurrence: null,
@@ -243,7 +165,6 @@ public static class EventEditPopover
 
         var initialRecurrence = TryParseRule(eventToEdit.RecurrenceRule);
         var preservedExDates = eventToEdit.RecurrenceExDatesUtc;
-        var (reminderQuantity, reminderUnit, reminderId) = InitialReminderOffset(existingReminders);
 
         return ShowAsync(
             anchorElement,
@@ -254,9 +175,7 @@ public static class EventEditPopover
             initialEndLocal: eventToEdit.EndTimeUtc.ToLocalTime(),
             initialIsAllDay: eventToEdit.IsAllDay,
             initialDescription: eventToEdit.Description,
-            initialReminderQuantity: reminderQuantity,
-            initialReminderUnit: reminderUnit,
-            initialReminderId: reminderId,
+            existingReminders: existingReminders,
             calendars: availableCalendars,
             selectedCalendarId: eventToEdit.CalendarId,
             initialRecurrence: initialRecurrence,
@@ -555,9 +474,7 @@ public static class EventEditPopover
         DateTime initialEndLocal,
         bool initialIsAllDay,
         string? initialDescription,
-        int? initialReminderQuantity,
-        ReminderOffsetUnit initialReminderUnit,
-        Guid? initialReminderId,
+        IReadOnlyList<Reminder> existingReminders,
         IList<Calendar> calendars,
         Guid? selectedCalendarId,
         RecurrenceRule? initialRecurrence,
@@ -670,8 +587,15 @@ public static class EventEditPopover
         root.Children.Add(MakeLabel("Notes"));
         root.Children.Add(notesBox);
 
-        // Remind me (single reminder; master/standalone path only).
-        var reminderCombo = BuildReminderPicker(initialReminderQuantity, initialReminderUnit);
+        // Remind me (single reminder; master/standalone path only). Presets,
+        // seeding, and the preserve-vs-replace save logic live in
+        // ReminderPickerModel.
+        var reminderCombo = new ComboBox
+        {
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            ItemsSource = ReminderPickerModel.BuildLabels(existingReminders),
+            SelectedIndex = ReminderPickerModel.SeedIndex(existingReminders)
+        };
         root.Children.Add(MakeLabel("Remind me"));
         root.Children.Add(reminderCombo);
 
@@ -714,8 +638,7 @@ public static class EventEditPopover
             if (TryBuildEvent(
                     nameBox, calendarCombo, allDayToggle,
                     startDate, startTime, endDate, endTime,
-                    notesBox, reminderCombo,
-                    (initialReminderQuantity, initialReminderUnit, initialReminderId),
+                    notesBox, reminderCombo, existingReminders,
                     recurrencePicker, buildEvent, errorBlock, out var result))
             {
                 tcs.TrySetResult(result);
@@ -745,7 +668,7 @@ public static class EventEditPopover
         TimePicker endTime,
         TextBox notesBox,
         ComboBox reminderCombo,
-        (int? Quantity, ReminderOffsetUnit Unit, Guid? Id) initialReminder,
+        IReadOnlyList<Reminder> existingReminders,
         RecurrencePicker recurrencePicker,
         Func<string, Guid, DateTime, DateTime, bool, string?, RecurrenceRule?, Event> buildEvent,
         TextBlock errorBlock,
@@ -804,9 +727,8 @@ public static class EventEditPopover
         {
             var evt = buildEvent(title, calendar.Id, startUtc, endUtc, isAllDay, description, recurrence);
             evt.Validate();
-            var reminders = ReadReminderSet(
-                reminderCombo, evt.Id,
-                initialReminder.Quantity, initialReminder.Unit, initialReminder.Id);
+            var reminders = ReminderPickerModel.ResolveForSave(
+                existingReminders, reminderCombo.SelectedIndex, evt.Id);
             result = new EventEditResult(evt, reminders);
             errorBlock.Visibility = Visibility.Collapsed;
             return true;

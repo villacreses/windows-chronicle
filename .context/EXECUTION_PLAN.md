@@ -56,7 +56,17 @@ anything is built on top of it.
   `architecture/REMINDERS.md`; rationale in DECISIONS.md. Suite grew to
   250; all four manual OS-integration verifications
   (`testing/MANUAL_VERIFICATION.md` MV-001–004) pass. Merged to main via
-  PR #18 — **Local Baseline Completion is done.**
+  PR #18.
+- Local Baseline Addendum — reminder correctness. A post-ship design
+  review found two internal-consistency gaps; both closed: the "Remind
+  me" picker's logic extracted to the pure, unit-tested
+  `Chronicle.Models.ReminderPickerModel`, which preserves an existing
+  reminder set the 0..1-preset editor can't represent instead of
+  silently destroying it; `Reminder.MaxOffsetMinutes` (4 weeks) enforced
+  in `Validate`, making the fixed 31-day scheduling pad invariant-backed
+  rather than coincidental. Suite grew to 270. See DECISIONS.md
+  "Reminders: Post-Ship Audit Positions" — **Local Baseline Completion
+  is done.**
 
 ### UI CONSTRAINT (TEMPORARY)
 
@@ -106,32 +116,37 @@ BACKLOG.md "Reminders."
 Suite is at 250 tests; all four Reminders manual OS-integration
 verifications pass (`testing/MANUAL_VERIFICATION.md` MV-001–004).
 
-**Next up: the Local Baseline Addendum below, then the Provider
-Integration Phase.**
+**Local Baseline Addendum is DONE. Next up: Provider Integration Phase.**
 
-### Local Baseline Addendum — Reminder Correctness (2026-07-18)
+### Local Baseline Addendum — Reminder Correctness (2026-07-18, closed)
 
 A post-ship surface-area review of the reminder subsystem (classified
 into blockers / provider prerequisites / the Reminder UX Parity area /
 non-goals — see DECISIONS.md "Reminders: Post-Ship Audit Positions" and
 BACKLOG.md "Reminders — UX Parity") found exactly **two** items that
-extend the Local Baseline. Both are internal-consistency fixes, not features, and
-they are the only items permitted to extend this milestone:
+extended the Local Baseline. Both were internal-consistency fixes, not
+features, and were the only items permitted to extend this milestone:
 
-1. **Editor preservation.** The 0..1-preset editor currently has a
-   destructive write path over the 0..N domain model: save replaces the
-   event's whole reminder set, and a non-preset offset displays as "No
-   reminder." Fix: preserve reminders the editor cannot represent, and
-   never render a non-preset offset as "No reminder." Not the
-   multi-reminder editor (BACKLOG) — preservation only.
-2. **Bounded offsets.** Enforce the decided maximum reminder offset
-   (4 weeks — see DECISIONS) at the write boundary, converting the
-   fixed 31-day scheduling pad from a coincidence into an
-   invariant-backed constant.
+1. **Editor preservation (done).** The picker's preset table, seeding,
+   and save logic were extracted from `EventEditPopover` into the pure,
+   unit-tested `Chronicle.Models.ReminderPickerModel` (Layer 5). An
+   existing reminder set the 0..1-preset editor can't represent (N
+   reminders, or an offset matching no preset) now surfaces a "Custom
+   (kept as-is)" entry and is preserved verbatim on save unless the user
+   explicitly picks a different preset. `ReminderPickerModelTests`
+   covers representability, seeding, and preservation.
+2. **Bounded offsets (done).** `Reminder.MaxOffsetMinutes` (4 weeks) is
+   enforced in `Reminder.Validate` at the single write chokepoint,
+   converting the fixed 31-day scheduling pad from a coincidence into an
+   invariant-backed constant. `ReminderValidationTests` pins the
+   boundary; `EventProjectionTests
+   .ReminderSchedule_CapturesMaxOffsetReminder_AtWindowEndBoundary` pins
+   the pad/bound interaction. No migration needed — the editor could
+   never produce an offset exceeding 2 weeks, so no existing data could
+   violate the new bound.
 
-Each lands with its tests (editor logic likely extracts to Core per the
-Layer-5 pattern; the pad gets a horizon-boundary test) and updates
-REMINDERS.md in the same change, per the drift rule.
+REMINDERS.md and DECISIONS.md were updated in the same change per the
+drift rule. Suite grew from 250 to 270.
 
 ## Recently Completed: Recurrence Phase 2B
 
@@ -275,9 +290,9 @@ Delivered:
 
 ## Next Milestones
 
-The Local Baseline is complete except the Addendum above, which is the
-active work. After it: provider integration, with Reminder UX Parity as
-a named capability area scheduled deliberately around it (see below).
+The Local Baseline, including the Addendum above, is complete. Provider
+integration is now the active milestone, with Reminder UX Parity as a
+named capability area scheduled deliberately around it (see below).
 
 ### Provider Integration Phase
 
@@ -353,7 +368,6 @@ Before Google integration begins:
 - Year view (Phase B) ✓
 - Reminders (Phase C) ✓ — merged via PR #18; see "Status" above
 - Local Baseline Addendum — reminder correctness (editor preservation +
-  bounded offsets; see "Status" above) — **pending**
+  bounded offsets) ✓ — see "Status" above
 
-**All original items satisfied; the Addendum is the remaining gate
-before Google integration begins.**
+**All items satisfied. Google integration is unblocked.**

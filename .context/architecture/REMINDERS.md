@@ -217,13 +217,17 @@ ReminderOccurrence { EventRef Ref; Guid ReminderId; DateTime FireTimeUtc;
 **Horizon and padding.** The reconciler expands events over a range padded
 past `windowEndUtc` by a **fixed pad** (`ReminderHorizonPad`, 31 days), so
 an event that starts just after the window but whose reminder fires inside
-it is not missed. The fixed pad covers every offset the editor can produce
-(largest preset: 2 weeks) but is **not** derived from the largest offset in
-the data — a reminder whose offset exceeds the pad, on an event starting
-beyond `horizon + pad`, would be silently missed. Unreachable through the
-editor today; becomes reachable the moment another writer (provider sync,
-import) can persist larger offsets. The horizon is a tunable **policy**
-(default ~60 days), not an architectural invariant.
+it is not missed. The fixed pad is safe against **any** reminder any writer
+can persist, not merely the editor's presets: `Reminder.Validate` enforces
+`Reminder.MaxOffsetMinutes` (4 weeks) as the maximum supported offset, at
+the single write chokepoint (`ReminderRepository.SetForEventAsync` calls
+`Validate` per reminder). 4 weeks < 31 days by construction, so no reminder
+that can ever be stored can fall outside the padded expansion range. See
+DECISIONS.md "Reminders: Post-Ship Audit Positions" for why 4 weeks (not a
+dynamically-derived pad) was chosen, and
+`EventProjectionTests.ReminderSchedule_CapturesMaxOffsetReminder_AtWindowEndBoundary`
+for the pinned boundary case. The horizon is a tunable **policy** (default
+~60 days), not an architectural invariant.
 
 ## Reminder identity across saves
 
@@ -267,8 +271,23 @@ already handle N reminders per event with arbitrary expressed offsets (the
 projection tests exercise the multi-reminder case directly). The editor can
 grow into an "Add reminder" collection UI — repeated `(quantity, unit)` rows
 — with **no persistence or projection redesign**: only the popover's
-read/seed of the reminder set changes. Nobody should read the dropdown as
-evidence that Chronicle events carry at most one reminder.
+read/seed of the reminder set changes (BACKLOG.md "Reminders — UX Parity").
+Nobody should read the dropdown as evidence that Chronicle events carry at
+most one reminder.
+
+**The gap is bridged by preservation, not by hiding it.** Because the
+dropdown is a UI limitation rather than a domain one, an event's reminder
+set can already be N reminders, or a single reminder at an offset no preset
+expresses — whether from a future writer or from direct data manipulation.
+`Chronicle.Models.ReminderPickerModel` (the picker's pure seam, see
+`.context/TESTING.md` Layer 5) detects when the existing set does not fit
+the 0..1-preset shape and surfaces a synthetic **"Custom (kept as-is)"**
+entry instead of silently mapping to "No reminder". Saving with that entry
+still selected preserves the existing set verbatim, byte-for-byte identity
+included; selecting any other entry is an explicit user choice and
+replaces the whole set with the single chosen preset, exactly as the 0..1
+model has always promised. This is the Local Baseline Addendum's
+correctness fix — see DECISIONS.md "Reminders: Post-Ship Audit Positions."
 
 ## Reconciliation contract
 
@@ -501,11 +520,13 @@ avoidance:
   boundaries.
 
 Applied here: pure parts live in `Chronicle.Core` and are unit-tested — the
-`Reminder` entity + `Validate`, the schema, the `ReminderRepository` (bulk
-load by event, cascade helpers), `EventProjection.ReminderSchedule` producing
-`ReminderOccurrence`, and the `ReminderActivationPayload` codec (pure identity
-serialization, shared by the scheduler and activation). These carry no
-notification concepts. The notification-delivery layer's platform APIs
+`Reminder` entity + `Validate` (including the bounded-offset invariant), the
+schema, the `ReminderRepository` (bulk load by event, cascade helpers),
+`EventProjection.ReminderSchedule` producing `ReminderOccurrence`, the
+`ReminderActivationPayload` codec (pure identity serialization, shared by
+the scheduler and activation), and `ReminderPickerModel` (the "Remind me"
+picker's presets, seeding, and preserve-vs-replace save logic, extracted
+from `EventEditPopover`). These carry no notification concepts. The notification-delivery layer's platform APIs
 (`Windows.UI.Notifications`) live in `src/Chronicle` in exactly one place —
 `ScheduledToastReminderScheduler`, behind the `IReminderScheduler` seam. That
 `ScheduledToastReminderScheduler` depends directly on `Windows.UI.Notifications`
